@@ -56,8 +56,9 @@ async def lifespan(app: FastAPI):
 
     # 3. Start Telegram Bot Polling
     bot_task = None
-    if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_BOT_TOKEN != "your_telegram_bot_token_here":
+    if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_BOT_TOKEN not in ("placeholder_token", "your_telegram_bot_token_here"):
         try:
+            await bot.delete_webhook(drop_pending_updates=True)
             bot_task = asyncio.create_task(dp.start_polling(bot))
             logger.info("Telegram Bot Polling started successfully.")
         except Exception as e:
