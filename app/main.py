@@ -100,10 +100,12 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+@app.get("/")
 @app.get("/health")
 async def health():
     """Health check endpoint."""
     return {
         "status": "healthy",
+        "service": "Crypto & Forex Watchman API",
         "bot_configured": settings.TELEGRAM_BOT_TOKEN != "your_telegram_bot_token_here"
     }
