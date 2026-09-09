@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: crypto-watchman
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: crypto-watchman-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: crypto-watchman-redis
+          property: connectionString
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ETHERSCAN_API_KEY
+        sync: false
+      - key: ADMIN_TELEGRAM_ID
+        sync: false
+
+databases:
+  - name: crypto-watchman-db
+    plan: free
+    databaseName: crypto_watchman
+    user: crypto_user
+
+  - type: redis
+    name: crypto-watchman-redis
+    plan: free
+    ipAllowList: []

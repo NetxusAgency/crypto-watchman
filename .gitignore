@@ -1,0 +1,24 @@
+# Environment variables (Contains secret tokens & passwords)
+.env
+.env.local
+
+# Python virtual environment & bytecode
+venv/
+.venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local SQLite databases
+*.db
+*.sqlite
+*.sqlite3
+crypto_watchman.db
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
