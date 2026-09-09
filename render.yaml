@@ -9,28 +9,12 @@ services:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: DATABASE_URL
-        fromDatabase:
-          name: crypto-watchman-db
-          property: connectionString
+        sync: false
       - key: REDIS_URL
-        fromService:
-          type: redis
-          name: crypto-watchman-redis
-          property: connectionString
+        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: ETHERSCAN_API_KEY
         sync: false
       - key: ADMIN_TELEGRAM_ID
         sync: false
-
-databases:
-  - name: crypto-watchman-db
-    plan: free
-    databaseName: crypto_watchman
-    user: crypto_user
-
-  - type: redis
-    name: crypto-watchman-redis
-    plan: free
-    ipAllowList: []
