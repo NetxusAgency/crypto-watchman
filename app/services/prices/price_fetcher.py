@@ -58,21 +58,38 @@ class PriceFetcher:
 
         # 3. Fallback to CoinGecko
         cg_id = await self._resolve_cg_id(symbol_upper)
-        if not cg_id:
-            logger.warning(f"Could not map symbol {symbol_upper} to CoinGecko ID.")
-            return None
+        if cg_id:
+            try:
+                headers = {"User-Agent": USER_AGENT}
+                if settings.COINGECKO_API_KEY:
+                    headers["x-cg-demo-api-key"] = settings.COINGECKO_API_KEY
+                url = f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usd"
+                resp = await self.client.get(url, headers=headers)
+                if resp.status_code == 200:
+                    return float(resp.json()[cg_id]["usd"])
+            except Exception as e:
+                logger.error(f"Error fetching crypto price for {symbol}: {e}")
 
+        # 4. Fallback to DexScreener (Covers all altcoins, DEX tokens, meme coins across all chains)
+        return await self.fetch_dexscreener_price(symbol_upper)
+
+    async def fetch_dexscreener_price(self, symbol: str) -> float | None:
+        """Fetch real-time crypto price from DexScreener API (covers all DEX tokens across all blockchains)."""
+        symbol_upper = symbol.upper().strip()
         try:
-            headers = {"User-Agent": USER_AGENT}
-            if settings.COINGECKO_API_KEY:
-                headers["x-cg-demo-api-key"] = settings.COINGECKO_API_KEY
-            url = f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usd"
-            resp = await self.client.get(url, headers=headers)
+            url = f"https://api.dexscreener.com/latest/dex/search?q={symbol_upper}"
+            resp = await self.client.get(url)
             if resp.status_code == 200:
-                return float(resp.json()[cg_id]["usd"])
-            logger.error(f"CoinGecko API returned status {resp.status_code}: {resp.text}")
+                pairs = resp.json().get("pairs", [])
+                if pairs:
+                    for p in pairs:
+                        base_symbol = p.get("baseToken", {}).get("symbol", "").upper()
+                        if base_symbol == symbol_upper and p.get("priceUsd"):
+                            return float(p["priceUsd"])
+                    if pairs[0].get("priceUsd"):
+                        return float(pairs[0]["priceUsd"])
         except Exception as e:
-            logger.error(f"Error fetching crypto price for {symbol}: {e}")
+            logger.debug(f"DexScreener fetch failed for {symbol_upper}: {e}")
         return None
 
     async def fetch_forex_price(self, symbol: str) -> float | None:
