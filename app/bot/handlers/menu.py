@@ -238,14 +238,29 @@ async def menu_help(message: Message):
 
 
 @router.message(StateFilter("*"), F.text.in_({"📊 Portfolio", "🔔 Alerts", "📈 Analytics", "📢 Sentiment", "🐋 Whales", "🧠 Digest", "⚙️ Settings", "❓ Help"}))
-async def fsm_cancel_to_menu(message: Message, state: FSMContext):
+async def fsm_cancel_to_menu(message: Message, session: AsyncSession, state: FSMContext):
     await state.clear()
-    await message.answer("👋 Returning to main menu.", reply_markup=main_menu_keyboard())
+    text = message.text
+    if text == "📊 Portfolio":
+        await menu_portfolio(message, session)
+    elif text == "🔔 Alerts":
+        await menu_alerts(message, session)
+    elif text == "📈 Analytics":
+        await menu_analytics(message, session)
+    elif text == "📢 Sentiment":
+        await menu_sentiment(message, session)
+    elif text == "🐋 Whales":
+        await menu_whale(message)
+    elif text == "🧠 Digest":
+        await menu_digest(message, session)
+    elif text == "⚙️ Settings":
+        await menu_settings(message, session)
+    elif text == "❓ Help":
+        await menu_help(message)
 
 
 @router.message(PortfolioStates.waiting_for_asset)
 async def fsm_add_asset(message: Message, session: AsyncSession, state: FSMContext):
-    await state.clear()
     args = message.text.strip().split()
     if len(args) < 2:
         await message.answer(
@@ -263,6 +278,7 @@ async def fsm_add_asset(message: Message, session: AsyncSession, state: FSMConte
         await message.answer("❌ Price must be a valid positive number.", reply_markup=portfolio_actions_keyboard())
         return
 
+    await state.clear()
     user = await db_service.get_or_create_user(
         session=session,
         telegram_id=message.from_user.id,

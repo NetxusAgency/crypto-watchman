@@ -4,6 +4,8 @@ from app.core.config import settings
 
 logger = logging.getLogger("crypto_watchman.price_fetcher")
 
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+
 # Mapping popular tickers to CoinGecko API IDs
 CRYPTO_MAPPING = {
     "BTC": "bitcoin",
@@ -25,20 +27,43 @@ CRYPTO_MAPPING = {
 
 class PriceFetcher:
     def __init__(self):
-        self.client = httpx.AsyncClient(timeout=10.0)
+        self.client = httpx.AsyncClient(timeout=10.0, headers={"User-Agent": USER_AGENT})
 
     async def close(self):
         await self.client.aclose()
 
     async def fetch_crypto_price(self, symbol: str) -> float | None:
-        """Fetch cryptocurrency price from CoinGecko API."""
-        cg_id = await self._resolve_cg_id(symbol)
+        """Fetch cryptocurrency price with Binance -> Coinbase -> CoinGecko fallback chain."""
+        symbol_upper = symbol.upper().strip()
+
+        # 1. Try Binance (Fastest, unthrottled for spot pairs like BTCUSDT)
+        try:
+            pair = f"{symbol_upper}USDT"
+            url = f"https://api.binance.com/api/v3/ticker/price?symbol={pair}"
+            resp = await self.client.get(url)
+            if resp.status_code == 200:
+                return float(resp.json()["price"])
+        except Exception as e:
+            logger.debug(f"Binance fetch failed for {symbol_upper}: {e}")
+
+        # 2. Try Coinbase (Fallback 1)
+        try:
+            url = f"https://api.coinbase.com/v2/prices/{symbol_upper}-USD/spot"
+            resp = await self.client.get(url)
+            if resp.status_code == 200:
+                data = resp.json()
+                return float(data["data"]["amount"])
+        except Exception as e:
+            logger.debug(f"Coinbase fetch failed for {symbol_upper}: {e}")
+
+        # 3. Fallback to CoinGecko
+        cg_id = await self._resolve_cg_id(symbol_upper)
         if not cg_id:
-            logger.warning(f"Could not map symbol {symbol} to CoinGecko ID.")
+            logger.warning(f"Could not map symbol {symbol_upper} to CoinGecko ID.")
             return None
 
         try:
-            headers = {}
+            headers = {"User-Agent": USER_AGENT}
             if settings.COINGECKO_API_KEY:
                 headers["x-cg-demo-api-key"] = settings.COINGECKO_API_KEY
             url = f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usd"
@@ -52,7 +77,7 @@ class PriceFetcher:
 
     async def fetch_forex_price(self, symbol: str) -> float | None:
         """Fetch forex pair price from TwelveData, with a free API fallback (open.er-api.com)."""
-        symbol_upper = symbol.upper().replace("/", "").strip() # e.g., EURUSD or EUR/USD -> EURUSD
+        symbol_upper = symbol.upper().replace("/", "").strip()
         
         # 1. Try TwelveData if API key is provided
         if settings.TWELVEDATA_API_KEY:
@@ -63,15 +88,11 @@ class PriceFetcher:
                     data = resp.json()
                     if "price" in data:
                         return float(data["price"])
-                    else:
-                        logger.warning(f"TwelveData error: {data}")
             except Exception as e:
                 logger.error(f"Error fetching forex price from TwelveData for {symbol_upper}: {e}")
 
-        # 2. Fallback to open.er-api.com (No API key needed, gets exchange rates relative to USD)
+        # 2. Fallback to open.er-api.com
         try:
-            # We assume symbols are typically formatted like EURUSD (EUR/USD) or GBPUSD
-            # We slice the first 3 chars as base and next 3 as target
             if len(symbol_upper) == 6:
                 base_currency = symbol_upper[:3]
                 target_currency = symbol_upper[3:]
@@ -83,11 +104,10 @@ class PriceFetcher:
                     rates = data.get("rates", {})
                     if target_currency in rates:
                         return float(rates[target_currency])
-                    # If base is USD, target is base_currency in the denominator
                     elif base_currency == "USD" and target_currency in rates:
                         return float(rates[target_currency])
         except Exception as e:
-            logger.error(f"Error fetching forex price from free er-api fallback for {symbol_upper}: {e}")
+            logger.error(f"Error fetching forex price from er-api fallback for {symbol_upper}: {e}")
 
         return None
 
@@ -95,18 +115,16 @@ class PriceFetcher:
         """Fetch 24h trading volume for a cryptocurrency from CoinGecko."""
         cg_id = await self._resolve_cg_id(symbol)
         if not cg_id:
-            logger.warning(f"Could not map symbol {symbol} to CoinGecko ID for volume.")
             return None
 
         try:
-            headers = {}
+            headers = {"User-Agent": USER_AGENT}
             if settings.COINGECKO_API_KEY:
                 headers["x-cg-demo-api-key"] = settings.COINGECKO_API_KEY
             url = f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usd&include_24hr_vol=true"
             resp = await self.client.get(url, headers=headers)
             if resp.status_code == 200:
                 return float(resp.json()[cg_id].get("usd_24h_vol", 0))
-            logger.error(f"CoinGecko volume API returned status {resp.status_code}: {resp.text}")
         except Exception as e:
             logger.error(f"Error fetching crypto volume for {symbol}: {e}")
         return None
@@ -118,7 +136,7 @@ class PriceFetcher:
             return cg_id
         try:
             search_url = f"https://api.coingecko.com/api/v3/search?query={symbol_upper}"
-            headers = {}
+            headers = {"User-Agent": USER_AGENT}
             if settings.COINGECKO_API_KEY:
                 headers["x-cg-demo-api-key"] = settings.COINGECKO_API_KEY
             resp = await self.client.get(search_url, headers=headers)
@@ -140,7 +158,6 @@ class PriceFetcher:
             url = f"https://api.coingecko.com/api/v3/coins/{cg_id}/market_chart?vs_currency=usd&days=30"
             resp = await self.client.get(url, timeout=15.0)
             if resp.status_code != 200:
-                logger.error(f"CoinGecko history returned {resp.status_code} for {symbol}")
                 return None
             prices = resp.json().get("prices", [])
             if len(prices) < 7:
@@ -164,7 +181,6 @@ class PriceFetcher:
         """General method to fetch asset price, detecting if crypto or forex."""
         symbol_clean = symbol.upper().strip()
         
-        # Simple heuristic: if length is 6 and contains common fiat codes, or has '/' -> Forex
         fiat_codes = {"USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD"}
         is_forex = False
         
