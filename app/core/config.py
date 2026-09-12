@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str | None = None
     OPENROUTER_API_KEY: str | None = None
     GROQ_API_KEY: str | None = None
-    GROQ_MODEL: str = "meta-llama/llama-4-scout-17b-16e-instruct"
+    GROQ_MODEL: str = "openai/gpt-oss-20b"
 
     # Security
     SECRET_KEY: str = Field(default="change-me-to-a-very-secure-key")
