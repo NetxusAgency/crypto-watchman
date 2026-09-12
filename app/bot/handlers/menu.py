@@ -8,6 +8,7 @@ from app.services.prices.price_fetcher import price_fetcher
 from app.services.sentiment.sentiment_monitor import sentiment_monitor
 from app.services.whale_tracker.whale_tracker import whale_tracker
 from app.services.market_digest.digest_service import generate_digest
+from app.services.news.news_service import build_user_news_report
 from app.bot.keyboards import (
     main_menu_keyboard, portfolio_actions_keyboard, alerts_actions_keyboard,
     back_button, cancel_button,
@@ -193,6 +194,24 @@ async def menu_digest(message: Message, session: AsyncSession):
     await message.answer(digest, parse_mode="HTML", reply_markup=back_button())
 
 
+@router.message(F.text == "📰 News")
+async def menu_news(message: Message, session: AsyncSession):
+    user = await db_service.get_or_create_user(
+        session=session,
+        telegram_id=message.from_user.id,
+        username=message.from_user.username,
+    )
+    report = await build_user_news_report(session, user.id)
+    if report is None:
+        await message.answer(
+            "📭 Your portfolio is empty. Add assets first.",
+            reply_markup=back_button(),
+        )
+        return
+    await message.answer("🔍 Scanning news sources... (can take up to 30s)")
+    await message.answer(report, parse_mode="HTML", reply_markup=back_button())
+
+
 @router.message(F.text == "⚙️ Settings")
 async def menu_settings(message: Message, session: AsyncSession):
     user = await db_service.get_or_create_user(
@@ -237,7 +256,7 @@ async def menu_help(message: Message):
     )
 
 
-@router.message(StateFilter("*"), F.text.in_({"📊 Portfolio", "🔔 Alerts", "📈 Analytics", "📢 Sentiment", "🐋 Whales", "🧠 Digest", "⚙️ Settings", "❓ Help"}))
+@router.message(StateFilter("*"), F.text.in_({"📊 Portfolio", "🔔 Alerts", "📈 Analytics", "📢 Sentiment", "🐋 Whales", "🧠 Digest", "📰 News", "⚙️ Settings", "❓ Help"}))
 async def fsm_cancel_to_menu(message: Message, session: AsyncSession, state: FSMContext):
     await state.clear()
     text = message.text
@@ -253,6 +272,8 @@ async def fsm_cancel_to_menu(message: Message, session: AsyncSession, state: FSM
         await menu_whale(message)
     elif text == "🧠 Digest":
         await menu_digest(message, session)
+    elif text == "📰 News":
+        await menu_news(message, session)
     elif text == "⚙️ Settings":
         await menu_settings(message, session)
     elif text == "❓ Help":

@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from sqlalchemy import BigInteger, ForeignKey, String, Float, Boolean, DateTime, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database.session import Base
+from app.database.models.news import NewsArticle, NewsAnalysis
 
 
 class User(Base):
@@ -67,4 +68,4 @@ class Subscription(Base):
     user: Mapped["User"] = relationship(back_populates="subscriptions")
 
 
-__all__ = ["User", "Portfolio", "Alert", "Notification", "Subscription"]
+__all__ = ["User", "Portfolio", "Alert", "Notification", "Subscription", "NewsArticle", "NewsAnalysis"]

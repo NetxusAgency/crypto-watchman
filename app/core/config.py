@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str | None = None
     GROQ_MODEL: str = "openai/gpt-oss-20b"
 
+    # AI News engine
+    NEWS_RETENTION_HOURS: int = Field(default=48, ge=1)
+    NEWS_REFRESH_MINUTES: int = Field(default=10, ge=1)
+    NEWS_MAX_QUERIES_PER_ASSET: int = Field(default=3, ge=1, le=5)
+
     # Security
     SECRET_KEY: str = Field(default="change-me-to-a-very-secure-key")
 

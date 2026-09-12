@@ -14,6 +14,8 @@ from app.services.prices.price_fetcher import price_fetcher
 from app.services.exchange_monitor.listing_monitor import listing_monitor
 from app.services.sentiment.sentiment_monitor import sentiment_monitor
 from app.services.whale_tracker.whale_tracker import whale_tracker
+from app.services.news.client import news_http
+from app.services.news import news_service
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -49,11 +51,24 @@ async def lifespan(app: FastAPI):
                 except Exception as e:
                     logger.error(f"Failed to send daily digest to User {user.id}: {e}")
 
+    async def run_news_refresh():
+        from app.services import db_service
+        async with async_session_maker() as session:
+            symbols = await db_service.all_portfolio_symbols(session)
+            if symbols:
+                await news_service.refresh_all(session, symbols)
+
+    async def run_news_cleanup():
+        async with async_session_maker() as session:
+            await news_service.cleanup_expired(session)
+
     scheduler.add_job(run_alert_check, "interval", seconds=30)
     scheduler.add_job(run_listing_check, "interval", minutes=2)
     scheduler.add_job(run_daily_digest, "cron", hour=9, minute=0)
+    scheduler.add_job(run_news_refresh, "interval", minutes=settings.NEWS_REFRESH_MINUTES)
+    scheduler.add_job(run_news_cleanup, "cron", hour="*/6", minute=5)
     scheduler.start()
-    logger.info("Started internal background scheduler (alerts 30s, listings 2m, digest daily at 09:00).")
+    logger.info("Started internal background scheduler (alerts 30s, listings 2m, digest daily at 09:00, news 10m).")
 
     # 3. Start Telegram Bot Polling (supervised, auto-restarts on crash)
     async def run_polling_worker():
@@ -119,7 +134,10 @@ async def lifespan(app: FastAPI):
     
     await listing_monitor.close()
     logger.info("Listing monitor clients closed.")
-    
+
+    await news_http.close()
+    logger.info("News HTTP client closed.")
+
     await engine.dispose()
     logger.info("Database connection pool disposed.")
 

@@ -37,7 +37,7 @@ async def format_portfolio_data(session: AsyncSession, user_id: int) -> str | No
     return header + "\n".join(lines)
 
 
-async def _call_chat_completions(url: str, api_key: str, model: str, prompt: str) -> str | None:
+async def _call_chat_completions(url: str, api_key: str, model: str, prompt: str, max_tokens: int = 500) -> str | None:
     try:
         import httpx
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -53,7 +53,7 @@ async def _call_chat_completions(url: str, api_key: str, model: str, prompt: str
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": prompt},
                     ],
-                    "max_tokens": 500,
+                    "max_tokens": max_tokens,
                     "temperature": 0.7,
                 },
             )
@@ -65,7 +65,7 @@ async def _call_chat_completions(url: str, api_key: str, model: str, prompt: str
     return None
 
 
-async def call_llm(prompt: str) -> str | None:
+async def call_llm(prompt: str, max_tokens: int = 500) -> str | None:
     providers = []
 
     # Groq is the primary provider (fast + free tier).
@@ -91,7 +91,7 @@ async def call_llm(prompt: str) -> str | None:
         ))
 
     for url, api_key, model in providers:
-        result = await _call_chat_completions(url, api_key, model, prompt)
+        result = await _call_chat_completions(url, api_key, model, prompt, max_tokens=max_tokens)
         if result:
             return result
 

@@ -36,6 +36,14 @@ async def get_portfolio(session: AsyncSession, user_id: int) -> list[Portfolio]:
     result = await session.execute(stmt)
     return list(result.scalars().all())
 
+
+async def all_portfolio_symbols(session: AsyncSession) -> list[str]:
+    """Distinct asset symbols across all users (for global news ingestion)."""
+    stmt = select(Portfolio.symbol).distinct()
+    result = await session.execute(stmt)
+    return [row[0] for row in result.all()]
+
+
 async def add_portfolio_asset(session: AsyncSession, user_id: int, symbol: str, entry_price: float) -> Portfolio:
     """Add a new asset to a user's portfolio, or update entry price if it already exists."""
     symbol = symbol.upper().strip()
