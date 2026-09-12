@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str | None = None
     OPENROUTER_API_KEY: str | None = None
     GROQ_API_KEY: str | None = None
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
 
     # Security
     SECRET_KEY: str = Field(default="change-me-to-a-very-secure-key")

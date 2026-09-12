@@ -40,22 +40,23 @@ async def format_portfolio_data(session: AsyncSession, user_id: int) -> str | No
 async def _call_chat_completions(url: str, api_key: str, model: str, prompt: str) -> str | None:
     try:
         import httpx
-        resp = await httpx.AsyncClient(timeout=30.0).post(
-            url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                "max_tokens": 500,
-                "temperature": 0.7,
-            },
-        )
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "max_tokens": 500,
+                    "temperature": 0.7,
+                },
+            )
         if resp.status_code == 200:
             return resp.json()["choices"][0]["message"]["content"].strip()
         logger.warning(f"LLM API ({url}) returned {resp.status_code}: {resp.text[:200]}")
@@ -66,6 +67,14 @@ async def _call_chat_completions(url: str, api_key: str, model: str, prompt: str
 
 async def call_llm(prompt: str) -> str | None:
     providers = []
+
+    # Groq is the primary provider (fast + free tier).
+    if settings.GROQ_API_KEY:
+        providers.append((
+            "https://api.groq.com/openai/v1/chat/completions",
+            settings.GROQ_API_KEY,
+            settings.GROQ_MODEL,
+        ))
 
     if settings.OPENAI_API_KEY:
         providers.append((
@@ -81,19 +90,12 @@ async def call_llm(prompt: str) -> str | None:
             "deepseek/deepseek-chat:free",
         ))
 
-    if settings.GROQ_API_KEY:
-        providers.append((
-            "https://api.groq.com/openai/v1/chat/completions",
-            settings.GROQ_API_KEY,
-            "llama-3.3-70b-versatile",
-        ))
-
     for url, api_key, model in providers:
         result = await _call_chat_completions(url, api_key, model, prompt)
         if result:
             return result
 
-    logger.warning("No LLM provider available or all returned errors. Set OPENAI_API_KEY or OPENROUTER_API_KEY in .env.")
+    logger.warning("No LLM provider available or all returned errors. Set GROQ_API_KEY (or OPENAI_API_KEY / OPENROUTER_API_KEY) in .env.")
     return None
 
 
