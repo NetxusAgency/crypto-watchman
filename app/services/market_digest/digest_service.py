@@ -87,7 +87,7 @@ async def call_llm(prompt: str) -> str | None:
         providers.append((
             "https://openrouter.ai/api/v1/chat/completions",
             settings.OPENROUTER_API_KEY,
-            "deepseek/deepseek-chat:free",
+            "deepseek/deepseek-chat",
         ))
 
     for url, api_key, model in providers:
