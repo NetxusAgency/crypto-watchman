@@ -2,6 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from aiogram.exceptions import TelegramConflictError
 
 from app.core.config import settings
 from app.core.logger import logger
@@ -54,13 +55,35 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     logger.info("Started internal background scheduler (alerts 30s, listings 2m, digest daily at 09:00).")
 
-    # 3. Start Telegram Bot Polling
+    # 3. Start Telegram Bot Polling (supervised, auto-restarts on crash)
+    async def run_polling_worker():
+        """Keep Telegram long-polling alive. Restarts with backoff if it crashes,
+        so a transient error (409 conflict, network blip) can't silently kill the bot."""
+        retry_delay = 5
+        while True:
+            try:
+                await bot.delete_webhook(drop_pending_updates=True)
+                await dp.start_polling(bot)
+                logger.info("Bot polling session ended cleanly.")
+                return
+            except asyncio.CancelledError:
+                logger.info("Bot polling worker cancelled (shutdown).")
+                raise
+            except TelegramConflictError as e:
+                logger.error(
+                    f"Polling conflict (409): {e}. Another instance is using the same bot "
+                    "token (e.g. bot running locally too). Will retry.")
+            except Exception as e:
+                logger.exception(f"Bot polling crashed: {e!r}")
+            logger.warning(f"Restarting bot polling in {retry_delay}s...")
+            await asyncio.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, 60)
+
     bot_task = None
     if settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_BOT_TOKEN not in ("placeholder_token", "your_telegram_bot_token_here"):
         try:
-            await bot.delete_webhook(drop_pending_updates=True)
-            bot_task = asyncio.create_task(dp.start_polling(bot))
-            logger.info("Telegram Bot Polling started successfully.")
+            bot_task = asyncio.create_task(run_polling_worker())
+            logger.info("Telegram Bot Polling started (supervised worker with auto-restart).")
         except Exception as e:
             logger.error(f"Failed to start Telegram Bot Polling: {e}")
     else:
@@ -70,8 +93,16 @@ async def lifespan(app: FastAPI):
     
     # Cleanup on shutdown
     logger.info("Shutting down services...")
-    if bot_task:
-        await dp.stop_polling()
+    if bot_task and not bot_task.done():
+        try:
+            await dp.stop_polling()
+        except Exception as e:
+            logger.warning(f"Error stopping polling: {e}")
+        bot_task.cancel()
+        try:
+            await bot_task
+        except asyncio.CancelledError:
+            pass
         logger.info("Telegram Bot Polling stopped.")
         
     scheduler.shutdown()
@@ -101,8 +132,8 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-@app.get("/")
-@app.get("/health")
+@app.api_route("/", methods=["GET", "HEAD", "OPTIONS"], include_in_schema=False)
+@app.api_route("/health", methods=["GET", "HEAD", "OPTIONS"], include_in_schema=False)
 async def health():
     """Health check endpoint."""
     return {
