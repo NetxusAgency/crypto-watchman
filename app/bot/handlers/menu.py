@@ -161,24 +161,27 @@ async def menu_sentiment(message: Message, session: AsyncSession):
 
 
 @router.message(F.text == "🐋 Whales")
-async def menu_whale(message: Message):
+async def menu_whale(message: Message, session: AsyncSession):
     await message.answer("🐋 Scanning blockchain...")
-    whales = await whale_tracker.get_whales()
+    whales = await whale_tracker.get_whales(session)
     if not whales:
         await message.answer(
-            "No large transactions detected.\nThresholds: ≥10 BTC, ≥100 ETH",
+            "No large transactions detected.\n"
+            "Covers: BTC (≥10) · ETH (≥100) · USDT/USDC (≥1M) · LINK/UNI/others (per asset)",
             reply_markup=back_button(),
         )
         return
     lines = ["🐋 <b>Recent Whale Transactions</b>\n"]
     for w in whales:
-        prefix = "₿" if w["asset"] == "BTC" else "Ξ"
-        line = f"{prefix} <b>{w['asset']}</b> {w['value']:,.2f}  | tx: <code>{w['txid']}</code>"
+        prefix = "₿" if w["asset"] == "BTC" else "Ξ" if w["asset"] == "ETH" else "🪙"
+        line = f"{prefix} <b>{w['asset']}</b> {w['value']:,.0f}  | tx: <code>{w['txid']}</code>"
+        if w.get("value_usd"):
+            line += f" | ≈ <b>${w['value_usd']:,.0f}</b>"
         to_addr = w.get("to", "")
         if to_addr:
-            line += f" | to: <code>{to_addr}</code>"
+            line += f"\n        → <code>{to_addr}</code>"
         lines.append(line)
-    lines.append("\n<i>BTC: mempool.space | ETH: Etherscan</i>")
+    lines.append("\n<i>BTC: mempool.space | ETH/ERC-20: Etherscan</i>")
     await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=back_button())
 
 
@@ -269,7 +272,7 @@ async def fsm_cancel_to_menu(message: Message, session: AsyncSession, state: FSM
     elif text == "📢 Sentiment":
         await menu_sentiment(message, session)
     elif text == "🐋 Whales":
-        await menu_whale(message)
+        await menu_whale(message, session)
     elif text == "🧠 Digest":
         await menu_digest(message, session)
     elif text == "📰 News":

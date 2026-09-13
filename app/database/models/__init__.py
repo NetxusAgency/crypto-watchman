@@ -3,6 +3,7 @@ from sqlalchemy import BigInteger, ForeignKey, String, Float, Boolean, DateTime,
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database.session import Base
 from app.database.models.news import NewsArticle, NewsAnalysis
+from app.database.models.whale import Asset, WhaleTransaction
 
 
 class User(Base):
@@ -68,4 +69,4 @@ class Subscription(Base):
     user: Mapped["User"] = relationship(back_populates="subscriptions")
 
 
-__all__ = ["User", "Portfolio", "Alert", "Notification", "Subscription", "NewsArticle", "NewsAnalysis"]
+__all__ = ["User", "Portfolio", "Alert", "Notification", "Subscription", "NewsArticle", "NewsAnalysis", "Asset", "WhaleTransaction"]

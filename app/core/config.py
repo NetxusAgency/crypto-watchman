@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     NEWS_REFRESH_MINUTES: int = Field(default=10, ge=1)
     NEWS_MAX_QUERIES_PER_ASSET: int = Field(default=3, ge=1, le=5)
 
+    # Multi-asset whale monitoring
+    WHALE_SCAN_MINUTES: int = Field(default=5, ge=1)
+    WHALE_MAX_ITEMS_PER_ASSET: int = Field(default=50, ge=1, le=200)
+
     # Security
     SECRET_KEY: str = Field(default="change-me-to-a-very-secure-key")
 

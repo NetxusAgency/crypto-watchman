@@ -7,8 +7,8 @@ Full design lives in `PHASE_2_IMPLEMENTATION.md`.
 
 | Phase | Feature | Status |
 |-------|---------|--------|
-| 2A | AI News + Market Sentiment Engine | **Implemented & tested** (this commit) |
-| 2B | Multi-Asset Whale Monitoring | Not started |
+| 2A | AI News + Market Sentiment Engine | **Implemented & tested** |
+| 2B | Multi-Asset Whale Monitoring | **Implemented & tested** (this delivery) |
 | 2C | AI Trading Assistant | Not started |
 | 2D | Web3 Portfolio | Not started |
 | 2E | Telegram Mini App | Not started |
@@ -64,7 +64,33 @@ Bullish/Bearish/Neutral, impact levels, "potential direction", and confidence �
 
 ---
 
-## Next up: Phase 2B — Multi-Asset Whale Monitoring
-Proposed scope in `PHASE_2_IMPLEMENTATION.md`: `assets` registry + `whale_transactions`,
-chain/provider abstraction, multi-token whale detection (BTC/ETH first), liquidity/reputation tiering,
-whale alerts beyond the current mempool.space + Etherscan pair.
+## 2B — Multi-Asset Whale Monitoring ✅
+
+Replaced the fixed BTC(+optional ETH) tracker with a provider-abstraction whale monitor covering a DB-backed asset registry.
+
+### New files
+- `app/database/models/whale.py` — `Asset` (registry: symbol, name, chain, contract, decimals, `whale_threshold`, tier, flags) + `WhaleTransaction` (deduped by `(asset, txid)` SHA-256)
+- `app/services/whale_tracker/assets.py` — `DEFAULT_ASSETS` (BTC, ETH, USDT, USDC, LINK, UNI, MATIC, SHIB, PEPE) + `seed_assets()` upsert
+- `app/services/whale_tracker/providers.py` — `WhaleProvider` ABC + `WhaleTransfer` dataclass; `BitcoinWhaleProvider` (mempool.space → Blockstream fallback), `EthereumWhaleProvider` (native ETH, Etherscan proxy), `Erc20WhaleProvider` (per-token `tokentx`, auto decimals conversion)
+
+### Modified files
+- `app/services/whale_tracker/whale_tracker.py` — rewritten: multi-provider aggregation, registry-threshold filtering, `fetch_and_store()` DB-backed dedup + USD value, `get_whales(session)` for the menu
+- `app/services/alerts/alert_manager.py` — whale alerts now use `fetch_and_store` (persistent dedup across restarts); alert message shows ≈ USD
+- `app/bot/handlers/menu.py` + `app/bot/handlers/whale.py` — pass `session`; multi-asset display with per-asset symbols, USD value, updated legend
+- `app/main.py` — seeds asset registry on startup; new background `run_whale_scan` job (every `WHALE_SCAN_MINUTES`)
+- `app/core/config.py` — `WHALE_SCAN_MINUTES`, `WHALE_MAX_ITEMS_PER_ASSET`
+- `app/database/models/__init__.py` — import new models
+
+### Tests
+- New `tests/test_whale.py` — 7 more tests (30 total, all passing):
+  dedup-key correctness, DEFAULT_ASSETS validity, BTC provider sats→BTC parsing (MockTransport), ERC-20 decimals conversion, `fetch_and_store` dedup + USD attribution, sub-threshold filtering.
+
+### Deploy/runtime notes
+- `whale_transactions` auto-created on startup. `seed_assets()` is idempotent.
+- BTC parity: mempool.space primary, Blockstream Esplora fallback (some regions block mempool.space — that's the case on this dev machine; Render US should reach both).
+- ETH + ERC-20 scanning requires `ETHERSCAN_API_KEY`; skips silently without it.
+- Whale scan job runs every 5 min to keep `whale_transactions` populated even without whale alerts; alert checks default back to it every 30s.
+
+---
+
+## Next up: Phase 2C — AI Trading Assistant

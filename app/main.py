@@ -16,6 +16,7 @@ from app.services.sentiment.sentiment_monitor import sentiment_monitor
 from app.services.whale_tracker.whale_tracker import whale_tracker
 from app.services.news.client import news_http
 from app.services.news import news_service
+from app.services.whale_tracker.assets import seed_assets
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -24,6 +25,15 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables verified.")
+
+    # 1b. Seed the asset registry used by the multi-asset whale monitor
+    try:
+        async with async_session_maker() as session:
+            created = await seed_assets(session)
+            if created:
+                logger.info(f"Seeded {created} default asset registry rows.")
+    except Exception as e:
+        logger.warning(f"Asset registry seeding skipped: {e}")
 
     # 2. Local scheduler for checking alerts (runs when Celery isn't running)
     scheduler = AsyncIOScheduler()
@@ -62,13 +72,18 @@ async def lifespan(app: FastAPI):
         async with async_session_maker() as session:
             await news_service.cleanup_expired(session)
 
+    async def run_whale_scan():
+        async with async_session_maker() as session:
+            await whale_tracker.fetch_and_store(session)
+
     scheduler.add_job(run_alert_check, "interval", seconds=30)
     scheduler.add_job(run_listing_check, "interval", minutes=2)
     scheduler.add_job(run_daily_digest, "cron", hour=9, minute=0)
     scheduler.add_job(run_news_refresh, "interval", minutes=settings.NEWS_REFRESH_MINUTES)
     scheduler.add_job(run_news_cleanup, "cron", hour="*/6", minute=5)
+    scheduler.add_job(run_whale_scan, "interval", minutes=settings.WHALE_SCAN_MINUTES)
     scheduler.start()
-    logger.info("Started internal background scheduler (alerts 30s, listings 2m, digest daily at 09:00, news 10m).")
+    logger.info("Started internal background scheduler (alerts 30s, listings 2m, digest daily at 09:00, news 10m, whales 5m).")
 
     # 3. Start Telegram Bot Polling (supervised, auto-restarts on crash)
     async def run_polling_worker():

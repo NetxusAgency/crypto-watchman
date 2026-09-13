@@ -94,18 +94,18 @@ No destructive migration. Because tables are created by `Base.metadata.create_al
 
 Phase 2A (this delivery) → 2B whales → 2C trading assistant → 2D wallets → 2E Mini App → 2F opportunity engine.
 
-### Phase 2A — AI News Intelligence (in progress)
-1. News DB models + `NEWS_RETENTION_HOURS` config. ✅ done next
+### Phase 2A — AI News Intelligence ✅ done
+1. News DB models + `NEWS_RETENTION_HOURS` config.
 2. Source abstraction (`NewsSource` base + normalized article) + Google News RSS.
-3. RSS + exchange sources (CoinGecko-adjacent crypto news feeds + Binance/Bybit/Coinbase announcements).
+3. RSS + exchange sources (CoinGecko-adjacent crypto news feeds + Binance/Coinbase announcements).
 4. Normalization + dedup (hash on title/url/content) + storage (`news_articles`).
 5. AI analysis via `call_llm`: per-asset sentiment/impact/direction/reason/confidence + event categories → `news_analysis`.
 6. `/news` Telegram command + 📰 News menu button.
 7. Background ingestion job + retention cleanup job in APScheduler.
 8. Verify: compile all modules; manual test via `/news`.
 
-### Phase 2B — Multi-Asset Whales
-Asset registry, chain/provider abstraction, multi-token whale detection, liquidity/reputation tiering, whale alerts.
+### Phase 2B — Multi-Asset Whales ✅ done
+Asset registry + `whale_transactions` store, `WhaleProvider` abstraction (BTC mempool→Blockstream fallback, ETH native + ERC-20 via Etherscan), registry-driven thresholds/tiering, DB-backed dedup, `/whale` + menu multi-asset display, 5-min background scan job.
 
 ### Phase 2C — Trading Assistant
 Coin/timeframe selection flow, OHLCV + indicators (MA/RSI/MACD/ATR), strategy storage/parsing, AI analysis → entry/SL/TP/R:R output. Analysis only — no auto-execution.

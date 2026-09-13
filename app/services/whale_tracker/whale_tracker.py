@@ -1,88 +1,160 @@
-import httpx
+import asyncio
+import hashlib
 import logging
+import time
+from datetime import datetime, timezone
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.config import settings
+from app.database.models import WhaleTransaction
+from app.services.prices.price_fetcher import price_fetcher
+from app.services.whale_tracker.assets import get_assets_map, get_erc20_assets
+from app.services.whale_tracker.providers import (
+    BitcoinWhaleProvider,
+    Erc20WhaleProvider,
+    EthereumWhaleProvider,
+    WhaleProvider,
+    WhaleTransfer,
+    default_client,
+)
 
 logger = logging.getLogger("crypto_watchman.whale_tracker")
 
-BTC_THRESHOLD = 10
-ETH_THRESHOLD = 100
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def dedup_key(asset: str, txid: str) -> str:
+    return hashlib.sha256(f"{asset.upper()}:{txid.strip()}".encode()).hexdigest()
+
 
 class WhaleTracker:
-    def __init__(self):
-        self.client = httpx.AsyncClient(timeout=10.0)
+    def __init__(self) -> None:
+        self.client = default_client()
+        self._last_scan = 0.0
+        self._min_scan_interval = 60.0
+        self._cache: list[WhaleTransfer] = []
 
-    async def close(self):
+    async def close(self) -> None:
         await self.client.aclose()
 
-    async def get_btc_whales(self) -> list[dict]:
-        try:
-            resp = await self.client.get("https://mempool.space/api/v1/blockchain")
-            if resp.status_code != 200:
-                logger.warning(f"mempool.space returned {resp.status_code}")
-                return []
-            data = resp.json()
-            block_hash = data.get("tipHashKey", "")
-            if not block_hash:
-                return []
-            block_resp = await self.client.get(f"https://mempool.space/api/block/{block_hash}/txs")
-            if block_resp.status_code != 200:
-                return []
-            txs = block_resp.json()
-            whales = []
-            for tx in txs[:20]:
-                total_out = sum(o.get("value", 0) for o in tx.get("vout", []))
-                btc_value = total_out / 100_000_000
-                if btc_value >= BTC_THRESHOLD:
-                    txid = tx.get("txid", "")[:12] + "..."
-                    whales.append({
-                        "txid": txid,
-                        "value": btc_value,
-                        "asset": "BTC",
-                        "source": "mempool.space",
-                    })
-            return whales
-        except Exception as e:
-            logger.error(f"Error fetching BTC whales: {e}")
-        return []
-
-    async def get_eth_whales(self) -> list[dict]:
-        if not settings.ETHERSCAN_API_KEY:
-            return []
-        try:
-            url = (
-                f"https://api.etherscan.io/api"
-                f"?module=proxy&action=eth_getBlockByNumber"
-                f"&tag=latest&boolean=true&apikey={settings.ETHERSCAN_API_KEY}"
+    async def _providers(self, session: AsyncSession) -> list[WhaleProvider]:
+        providers: list[WhaleProvider] = [
+            BitcoinWhaleProvider(self.client),
+            EthereumWhaleProvider(self.client),
+        ]
+        erc20_assets = await get_erc20_assets(session)
+        if erc20_assets:
+            providers.append(
+                Erc20WhaleProvider(
+                    self.client,
+                    erc20_assets,
+                    max_per_asset=settings.WHALE_MAX_ITEMS_PER_ASSET,
+                )
             )
-            resp = await self.client.get(url)
-            if resp.status_code != 200:
-                return []
-            data = resp.json()
-            txs = (data.get("result") or {}).get("transactions", [])
-            whales = []
-            for tx in txs:
-                value_wei = int(tx.get("value", "0x0"), 16)
-                value_eth = value_wei / 10**18
-                if value_eth >= ETH_THRESHOLD:
-                    txid = tx.get("hash", "")[:12] + "..."
-                    to_addr = (tx.get("to") or "N/A")[:8] + "..."
-                    whales.append({
-                        "txid": txid,
-                        "value": round(value_eth, 2),
-                        "asset": "ETH",
-                        "source": "Etherscan",
-                        "to": to_addr,
-                    })
-            return whales
-        except Exception as e:
-            logger.error(f"Error fetching ETH whales: {e}")
-        return []
+        return providers
 
-    async def get_whales(self) -> list[dict]:
-        btc = await self.get_btc_whales()
-        eth = await self.get_eth_whales()
-        all_whales = btc + eth
-        all_whales.sort(key=lambda w: w["value"], reverse=True)
-        return all_whales[:10]
+    async def fetch_all(self, session: AsyncSession, max_items: int = 50) -> list[WhaleTransfer]:
+        """Live multi-asset scan across all providers (no DB writes)."""
+        providers = await self._providers(session)
+        per_provider = max(1, max_items + 20)
+        results = await asyncio.gather(
+            *[p.fetch_whales(per_provider) for p in providers],
+            return_exceptions=True,
+        )
+        out: list[WhaleTransfer] = []
+        for result in results:
+            if isinstance(result, Exception):
+                logger.warning(f"Whale provider failed: {result}")
+                continue
+            out.extend(result)
+        # Filter to registered assets at or above their whale threshold.
+        assets_map = await get_assets_map(session)
+        filtered = [
+            t for t in out
+            if t.asset in assets_map and assets_map[t.asset].whale_threshold > 0
+            and t.value >= assets_map[t.asset].whale_threshold
+        ]
+        filtered.sort(key=lambda t: t.value, reverse=True)
+        return filtered[:max_items]
+
+    async def get_whales(self, session: AsyncSession) -> list[dict]:
+        """Live scan formatted for the /whale menu (multi-asset, top 10)."""
+        transfers = await self.fetch_all(session, max_items=30)
+        self._last_scan = time.time()
+        return [self._to_dict(t) for t in transfers[:10]]
+
+    async def fetch_and_store(self, session: AsyncSession) -> list[dict]:
+        """Scan, persist new whale txs, and return only the NEW ones (DB-backed dedup)."""
+        if time.time() - self._last_scan < self._min_scan_interval and self._cache:
+            transfers = self._cache
+        else:
+            transfers = await self.fetch_all(session, max_items=60)
+            self._cache = transfers
+            self._last_scan = time.time()
+
+        if not transfers:
+            return []
+
+        assets_map = await get_assets_map(session)
+        usd_tasks = []
+        for t in transfers:
+            usd_tasks.append(self._usd_value(t.asset, t.value))
+        usd_values = await asyncio.gather(*usd_tasks, return_exceptions=True)
+
+        now = _utcnow()
+        new_txs: list[dict] = []
+        for t, usd in zip(transfers, usd_values):
+            dk = dedup_key(t.asset, t.txid)
+            exists = await session.execute(select(WhaleTransaction.id).where(WhaleTransaction.dedup_key == dk))
+            if exists.scalar_one_or_none():
+                continue
+            session.add(
+                WhaleTransaction(
+                    dedup_key=dk,
+                    asset=t.asset.upper(),
+                    chain=t.chain,
+                    value=t.value,
+                    value_usd=float(usd) if isinstance(usd, (int, float)) else None,
+                    txid=t.txid,
+                    from_addr=t.from_addr,
+                    to_addr=t.to_addr,
+                    source=t.source,
+                    created_at=now,
+                )
+            )
+            new_txs.append(self._to_dict(t, value_usd=(float(usd) if isinstance(usd, (int, float)) else None)))
+
+        if new_txs:
+            await session.commit()
+            logger.info(f"Stored {len(new_txs)} new whale transaction(s)")
+        return new_txs
+
+    async def _usd_value(self, symbol: str, amount: float) -> float | None:
+        try:
+            price = await price_fetcher.get_price(symbol)
+            if price:
+                return price * amount
+        except Exception as e:
+            logger.debug(f"USD value fetch failed for {symbol}: {e}")
+        return None
+
+    @staticmethod
+    def _to_dict(t: WhaleTransfer, value_usd: float | None = None) -> dict:
+        return {
+            "txid": (t.txid or "")[:12] + "..." if t.txid else "",
+            "full_txid": t.txid,
+            "asset": t.asset.upper(),
+            "chain": t.chain,
+            "value": t.value,
+            "value_usd": value_usd,
+            "source": t.source,
+            "to": t.to_addr,
+            "from": t.from_addr,
+        }
+
 
 whale_tracker = WhaleTracker()

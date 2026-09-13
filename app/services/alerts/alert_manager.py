@@ -69,11 +69,11 @@ async def check_all_alerts(session: AsyncSession):
                 sentiment_counts[symbol] = counts["total"]
         _last_sentiment_check = time.time()
 
-    # 2e. Fetch whale transactions for whale alerts
+    # 2e. Fetch whale transactions for whale alerts (DB-backed dedup)
     global _seen_whale_txids
     whale_txs: list[dict] = []
     if whale_alerts:
-        whale_txs = await whale_tracker.get_whales()
+        whale_txs = await whale_tracker.fetch_and_store(session)
         if len(_seen_whale_txids) > 1000:
             _seen_whale_txids.clear()
 
@@ -133,6 +133,8 @@ async def check_all_alerts(session: AsyncSession):
                     f"• Tx: <code>{tx['txid']}</code>\n"
                     f"• Source: {tx['source']}"
                 )
+                if tx.get("value_usd"):
+                    message += f"\n• ≈ ${tx['value_usd']:,.0f}"
                 to_addr = tx.get("to", "")
                 if to_addr:
                     message += f"\n• To: <code>{to_addr}</code>"
