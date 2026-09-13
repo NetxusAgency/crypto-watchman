@@ -8,6 +8,7 @@ import httpx
 
 from app.core.config import settings
 from app.services.whale_tracker.assets import Asset
+from app.services.whale_tracker.direction import classify_direction
 
 logger = logging.getLogger("crypto_watchman.whale_providers")
 
@@ -15,6 +16,24 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 
 MEMPOOL_API = "https://mempool.space/api"
 ETHERSCAN_API = "https://api.etherscan.io/api"
+
+
+def _extract_btc_from_to(tx: dict) -> tuple[str | None, str | None]:
+    """Extract a representative from/to address from a mempool/blockstream tx."""
+    from_addr = None
+    for vin in tx.get("vin", []) or []:
+        prevout = vin.get("prevout") or {}
+        addr = prevout.get("scriptpubkey_address")
+        if addr:
+            from_addr = addr
+            break
+    to_addr = None
+    for vout in tx.get("vout", []) or []:
+        addr = vout.get("scriptpubkey_address")
+        if addr:
+            to_addr = addr
+            break
+    return from_addr, to_addr
 
 
 @dataclass
@@ -27,6 +46,8 @@ class WhaleTransfer:
     to_addr: str | None = None
     source: str = "unknown"
     detected_at: datetime | None = None
+    direction: str = "TRANSFER"
+    direction_confidence: str = "low"
     raw: dict = field(default_factory=dict)
 
 
@@ -84,15 +105,19 @@ class BitcoinWhaleProvider(WhaleProvider):
                 total_sats = sum(o.get("value", 0) for o in tx.get("vout", []))
                 btc = total_sats / 10 ** self.decimal_places
                 if btc > 0:
+                    from_addr, to_addr = _extract_btc_from_to(tx)
+                    direction, confidence = classify_direction(self.chain, from_addr, to_addr)
                     out.append(
                         WhaleTransfer(
                             asset=self.asset,
                             chain=self.chain,
                             value=btc,
                             txid=tx.get("txid", ""),
-                            from_addr=None,
-                            to_addr=None,
+                            from_addr=from_addr,
+                            to_addr=to_addr,
                             source=self.name,
+                            direction=direction,
+                            direction_confidence=confidence,
                             raw=tx,
                         )
                     )
@@ -124,15 +149,19 @@ class BitcoinWhaleProvider(WhaleProvider):
             total_sats = sum(o.get("value", 0) for o in tx.get("vout", []))
             btc = total_sats / 10 ** self.decimal_places
             if btc > 0:
+                from_addr, to_addr = _extract_btc_from_to(tx)
+                direction, confidence = classify_direction(self.chain, from_addr, to_addr)
                 out.append(
                     WhaleTransfer(
                         asset=self.asset,
                         chain=self.chain,
                         value=btc,
                         txid=tx.get("txid", ""),
-                        from_addr=None,
-                        to_addr=None,
+                        from_addr=from_addr,
+                        to_addr=to_addr,
                         source="Blockstream",
+                        direction=direction,
+                        direction_confidence=confidence,
                         raw=tx,
                     )
                 )
@@ -173,6 +202,7 @@ class EthereumWhaleProvider(WhaleProvider):
             except (ValueError, TypeError):
                 continue
             eth = value_wei / 10 ** self.decimal_places
+            direction, confidence = classify_direction(self.chain, tx.get("from"), tx.get("to"))
             out.append(
                 WhaleTransfer(
                     asset=self.asset,
@@ -182,6 +212,8 @@ class EthereumWhaleProvider(WhaleProvider):
                     from_addr=tx.get("from"),
                     to_addr=tx.get("to"),
                     source=self.name,
+                    direction=direction,
+                    direction_confidence=confidence,
                     raw=tx,
                 )
             )
@@ -239,6 +271,7 @@ class Erc20WhaleProvider(WhaleProvider):
                 value = raw_value / (10 ** token_decimals)
             except (ValueError, TypeError):
                 continue
+            direction, confidence = classify_direction(self.chain, tx.get("from"), tx.get("to"))
             out.append(
                 WhaleTransfer(
                     asset=symbol,
@@ -248,6 +281,8 @@ class Erc20WhaleProvider(WhaleProvider):
                     from_addr=tx.get("from"),
                     to_addr=tx.get("to"),
                     source=self.name,
+                    direction=direction,
+                    direction_confidence=confidence,
                     raw=tx,
                 )
             )

@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiogram.exceptions import TelegramConflictError
+from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.logger import logger
@@ -18,12 +19,34 @@ from app.services.news.client import news_http
 from app.services.news import news_service
 from app.services.whale_tracker.assets import seed_assets
 
+# Additive DB columns added after a table already exists (create_all cannot add
+# columns to an existing table). Each entry is applied idempotently at startup.
+_ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
+    ("whale_transactions", "direction", "VARCHAR(10)"),
+    ("whale_transactions", "direction_confidence", "VARCHAR(10)"),
+]
+
+
+async def ensure_additive_columns() -> None:
+    for table, column, ddl in _ADDITIVE_COLUMNS:
+        try:
+            stmt = text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+            if engine.dialect.name != "sqlite":
+                # Postgres supports IF NOT EXISTS; sqlite does not.
+                stmt = text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {ddl}")
+            async with engine.begin() as conn:
+                await conn.execute(stmt)
+        except Exception as e:  # column already exists (sqlite) or similar
+            logger.debug(f"Column check {table}.{column}: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 1. Initialize Database Tables (auto-migration on startup)
     logger.info("Creating database tables if not exist...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    await ensure_additive_columns()
     logger.info("Database tables verified.")
 
     # 1b. Seed the asset registry used by the multi-asset whale monitor

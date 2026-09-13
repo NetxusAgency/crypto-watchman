@@ -111,3 +111,12 @@ def confirm_alert_remove_keyboard(alert_id: int) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="❌ No", callback_data="menu_alerts")],
         ]
     )
+
+
+def whale_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔧 Set scan coins", callback_data="whale_configure")],
+            [InlineKeyboardButton(text="◀ Back", callback_data="menu_main")],
+        ]
+    )

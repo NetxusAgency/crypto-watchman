@@ -3,12 +3,13 @@ from aiogram.types import CallbackQuery
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services import db_service
+from app.services.whale_tracker.assets import get_user_scan_symbols, get_assets_map
 from app.bot.keyboards import (
     main_menu_keyboard, portfolio_actions_keyboard, asset_list_keyboard,
     confirm_remove_keyboard, alerts_actions_keyboard, alert_types_keyboard,
     alert_asset_list_keyboard, alert_list_keyboard, confirm_alert_remove_keyboard,
 )
-from app.bot.states import PortfolioStates, AlertStates
+from app.bot.states import PortfolioStates, AlertStates, WhaleStates
 
 router = Router(name="callback_handlers")
 
@@ -258,4 +259,29 @@ async def alert_remove_execute(callback: CallbackQuery, session: AsyncSession, s
     else:
         text = f"❌ Could not remove alert <b>{alert_id}</b>."
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=alerts_actions_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "whale_configure")
+async def whale_configure_start(callback: CallbackQuery, session: AsyncSession, state: FSMContext):
+    user = await db_service.get_or_create_user(
+        session=session,
+        telegram_id=callback.from_user.id,
+        username=callback.from_user.username,
+    )
+    current = await get_user_scan_symbols(session, user.id)
+    assets_map = await get_assets_map(session)
+    available = ", ".join(sorted(assets_map.keys()))
+    scope = ", ".join(current) if current else "All tracked assets"
+    await state.set_state(WhaleStates.waiting_for_symbols)
+    await state.update_data(scan_scope=scope)
+    await callback.message.edit_text(
+        "🐋 <b>Configure Whale Scan</b>\n\n"
+        f"Currently scanning: <code>{scope}</code>\n\n"
+        "Send the symbols to scan, comma-separated.\n"
+        "Example: <code>BTC, ETH, USDT</code>\n"
+        "Send <code>all</code> to track every asset, <code>none</code> to clear.\n\n"
+        f"Available: <code>{available}</code>",
+        parse_mode="HTML",
+    )
     await callback.answer()

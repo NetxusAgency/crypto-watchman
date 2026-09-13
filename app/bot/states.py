@@ -9,3 +9,7 @@ class AlertStates(StatesGroup):
     waiting_symbol = State()
     waiting_type = State()
     waiting_target = State()
+
+
+class WhaleStates(StatesGroup):
+    waiting_for_symbols = State()

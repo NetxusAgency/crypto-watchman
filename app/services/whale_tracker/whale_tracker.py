@@ -41,12 +41,15 @@ class WhaleTracker:
     async def close(self) -> None:
         await self.client.aclose()
 
-    async def _providers(self, session: AsyncSession) -> list[WhaleProvider]:
-        providers: list[WhaleProvider] = [
-            BitcoinWhaleProvider(self.client),
-            EthereumWhaleProvider(self.client),
-        ]
+    async def _providers(self, session: AsyncSession, symbols: set[str] | None = None) -> list[WhaleProvider]:
+        providers: list[WhaleProvider] = []
+        if symbols is None or "BTC" in symbols:
+            providers.append(BitcoinWhaleProvider(self.client))
+        if symbols is None or "ETH" in symbols:
+            providers.append(EthereumWhaleProvider(self.client))
         erc20_assets = await get_erc20_assets(session)
+        if symbols is not None:
+            erc20_assets = [a for a in erc20_assets if a.symbol.upper() in symbols]
         if erc20_assets:
             providers.append(
                 Erc20WhaleProvider(
@@ -57,9 +60,9 @@ class WhaleTracker:
             )
         return providers
 
-    async def fetch_all(self, session: AsyncSession, max_items: int = 50) -> list[WhaleTransfer]:
+    async def fetch_all(self, session: AsyncSession, max_items: int = 50, symbols: set[str] | None = None) -> list[WhaleTransfer]:
         """Live multi-asset scan across all providers (no DB writes)."""
-        providers = await self._providers(session)
+        providers = await self._providers(session, symbols)
         per_provider = max(1, max_items + 20)
         results = await asyncio.gather(
             *[p.fetch_whales(per_provider) for p in providers],
@@ -71,28 +74,30 @@ class WhaleTracker:
                 logger.warning(f"Whale provider failed: {result}")
                 continue
             out.extend(result)
+        symbols = {s.upper() for s in symbols} if symbols else None
         # Filter to registered assets at or above their whale threshold.
         assets_map = await get_assets_map(session)
         filtered = [
             t for t in out
-            if t.asset in assets_map and assets_map[t.asset].whale_threshold > 0
+            if (symbols is None or t.asset.upper() in symbols)
+            and t.asset in assets_map and assets_map[t.asset].whale_threshold > 0
             and t.value >= assets_map[t.asset].whale_threshold
         ]
         filtered.sort(key=lambda t: t.value, reverse=True)
         return filtered[:max_items]
 
-    async def get_whales(self, session: AsyncSession) -> list[dict]:
+    async def get_whales(self, session: AsyncSession, symbols: set[str] | None = None) -> list[dict]:
         """Live scan formatted for the /whale menu (multi-asset, top 10)."""
-        transfers = await self.fetch_all(session, max_items=30)
+        transfers = await self.fetch_all(session, max_items=30, symbols=symbols)
         self._last_scan = time.time()
         return [self._to_dict(t) for t in transfers[:10]]
 
-    async def fetch_and_store(self, session: AsyncSession) -> list[dict]:
+    async def fetch_and_store(self, session: AsyncSession, symbols: set[str] | None = None) -> list[dict]:
         """Scan, persist new whale txs, and return only the NEW ones (DB-backed dedup)."""
         if time.time() - self._last_scan < self._min_scan_interval and self._cache:
             transfers = self._cache
         else:
-            transfers = await self.fetch_all(session, max_items=60)
+            transfers = await self.fetch_all(session, max_items=60, symbols=symbols)
             self._cache = transfers
             self._last_scan = time.time()
 
@@ -123,6 +128,8 @@ class WhaleTracker:
                     from_addr=t.from_addr,
                     to_addr=t.to_addr,
                     source=t.source,
+                    direction=t.direction,
+                    direction_confidence=t.direction_confidence,
                     created_at=now,
                 )
             )
@@ -154,6 +161,8 @@ class WhaleTracker:
             "source": t.source,
             "to": t.to_addr,
             "from": t.from_addr,
+            "direction": t.direction,
+            "direction_confidence": t.direction_confidence,
         }
 
 

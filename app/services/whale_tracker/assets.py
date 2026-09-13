@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database.models import Asset
+from app.database.models import Asset, WhalePreference
 
 # Default on-chain assets tracked for whale monitoring.
 # `whale_threshold` is the default min value (native units), overridable per DB row.
@@ -59,3 +59,29 @@ async def get_erc20_assets(session: AsyncSession) -> list[Asset]:
         select(Asset).where(Asset.chain == "ethereum", Asset.contract_address.is_not(None))
     )).scalars().all()
     return [a for a in rows if a.contract_address]
+
+
+async def set_user_scan_symbols(session: AsyncSession, user_id: int, symbols: list[str]) -> None:
+    """Replace a user's whale scan preferences. Empty list clears them (full registry)."""
+    clean = list(dict.fromkeys(s.upper() for s in symbols if s.strip()))
+    existing = (await session.execute(
+        select(WhalePreference.symbol).where(WhalePreference.user_id == user_id)
+    )).scalars().all()
+    for row in existing:
+        await session.execute(
+            WhalePreference.__table__.delete().where(
+                WhalePreference.user_id == user_id,
+                WhalePreference.symbol == row,
+            )
+        )
+    for symbol in clean:
+        session.add(WhalePreference(user_id=user_id, symbol=symbol))
+    await session.commit()
+
+
+async def get_user_scan_symbols(session: AsyncSession, user_id: int) -> list[str]:
+    """Return a user's preferred scan symbols ([] = use full registry)."""
+    rows = (await session.execute(
+        select(WhalePreference.symbol).where(WhalePreference.user_id == user_id)
+    )).scalars().all()
+    return [s.upper() for s in rows]

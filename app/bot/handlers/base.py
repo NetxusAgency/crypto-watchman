@@ -40,7 +40,7 @@ async def cmd_help(message: Message):
         "<b>Analytics:</b>\n"
         "• /analytics - Shows PnL breakdown, best/worst performers.\n"
         "• /sentiment - Shows Reddit and news mention counts for your assets.\n"
-        "• /whale - Shows recent large blockchain transactions (≥10 BTC, ≥100 ETH).\n"
+        "• /whale - Shows recent large blockchain transactions with estimated BUY/SELL direction. Tap 🔧 Set scan coins to choose assets.\n"
         "• /digest - Generates an AI-powered market summary of your portfolio.\n\n"
         "<b>Account Settings:</b>\n"
         "• /settings - Shows your account status, active plan, and usage details.\n"

@@ -9,11 +9,17 @@ from app.services.sentiment.sentiment_monitor import sentiment_monitor
 from app.services.whale_tracker.whale_tracker import whale_tracker
 from app.services.market_digest.digest_service import generate_digest
 from app.services.news.news_service import build_user_news_report
+from app.services.whale_tracker.assets import (
+    get_user_scan_symbols,
+    set_user_scan_symbols,
+    get_assets_map,
+)
+from app.bot.handlers.whale import format_whales
 from app.bot.keyboards import (
     main_menu_keyboard, portfolio_actions_keyboard, alerts_actions_keyboard,
-    back_button, cancel_button,
+    back_button, cancel_button, whale_menu_keyboard,
 )
-from app.bot.states import PortfolioStates, AlertStates
+from app.bot.states import PortfolioStates, AlertStates, WhaleStates
 
 router = Router(name="menu_handlers")
 
@@ -162,27 +168,29 @@ async def menu_sentiment(message: Message, session: AsyncSession):
 
 @router.message(F.text == "🐋 Whales")
 async def menu_whale(message: Message, session: AsyncSession):
+    user = await db_service.get_or_create_user(
+        session=session,
+        telegram_id=message.from_user.id,
+        username=message.from_user.username,
+    )
+    prefs = await get_user_scan_symbols(session, user.id)
+    symbols = set(prefs) if prefs else None
+
     await message.answer("🐋 Scanning blockchain...")
-    whales = await whale_tracker.get_whales(session)
+    whales = await whale_tracker.get_whales(session, symbols=symbols)
     if not whales:
+        scope = ", ".join(prefs) if prefs else "All tracked assets"
         await message.answer(
-            "No large transactions detected.\n"
-            "Covers: BTC (≥10) · ETH (≥100) · USDT/USDC (≥1M) · LINK/UNI/others (per asset)",
-            reply_markup=back_button(),
+            f"No large transactions detected.\n"
+            f"Scanning: <code>{scope}</code>",
+            parse_mode="HTML",
+            reply_markup=whale_menu_keyboard(),
         )
         return
-    lines = ["🐋 <b>Recent Whale Transactions</b>\n"]
-    for w in whales:
-        prefix = "₿" if w["asset"] == "BTC" else "Ξ" if w["asset"] == "ETH" else "🪙"
-        line = f"{prefix} <b>{w['asset']}</b> {w['value']:,.0f}  | tx: <code>{w['txid']}</code>"
-        if w.get("value_usd"):
-            line += f" | ≈ <b>${w['value_usd']:,.0f}</b>"
-        to_addr = w.get("to", "")
-        if to_addr:
-            line += f"\n        → <code>{to_addr}</code>"
-        lines.append(line)
-    lines.append("\n<i>BTC: mempool.space | ETH/ERC-20: Etherscan</i>")
-    await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=back_button())
+    scope = ", ".join(prefs) if prefs else "All tracked assets"
+    lines = format_whales(whales)
+    lines[0] = f"🐋 <b>Recent Whale Transactions</b> — <code>{scope}</code>\n"
+    await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=whale_menu_keyboard())
 
 
 @router.message(F.text == "🧠 Digest")
@@ -252,7 +260,7 @@ async def menu_help(message: Message):
         "• <b>Volume</b> — 24h volume exceeds $X\n"
         "• <b>Volatility</b> — daily move > Xx normal\n"
         "• <b>Sentiment</b> — Reddit+news mentions > X\n"
-        "• <b>Whale</b> — on-chain tx ≥ X units\n\n"
+        "• <b>Whale</b> — on-chain tx ≥ X units (BUY/SELL estimated)\n\n"
         "Commands still work too: /help, /portfolio, etc.",
         parse_mode="HTML",
         reply_markup=main_menu_keyboard(),
@@ -386,4 +394,53 @@ async def fsm_add_alert(message: Message, session: AsyncSession, state: FSMConte
         f"🔔 <b>Alert Set!</b>\nID: <code>{alert.id}</code> | <b>{symbol}</b> — {desc}",
         parse_mode="HTML",
         reply_markup=alerts_actions_keyboard(),
+    )
+
+
+@router.message(WhaleStates.waiting_for_symbols)
+async def fsm_set_scan_symbols(message: Message, session: AsyncSession, state: FSMContext):
+    await state.clear()
+    user = await db_service.get_or_create_user(
+        session=session,
+        telegram_id=message.from_user.id,
+        username=message.from_user.username,
+    )
+    raw = message.text.strip()
+    lowered = raw.lower()
+
+    if lowered in ("none", "clear", "reset"):
+        await set_user_scan_symbols(session, user.id, [])
+        await message.answer(
+            "✅ Scan set to <b>all tracked assets</b>.",
+            parse_mode="HTML",
+            reply_markup=whale_menu_keyboard(),
+        )
+        return
+
+    tokens = [t.strip().upper() for t in raw.replace(",", " ").split() if t.strip()]
+    if lowered == "all" or not tokens:
+        await set_user_scan_symbols(session, user.id, [])
+        await message.answer(
+            "✅ Scan set to <b>all tracked assets</b>.",
+            parse_mode="HTML",
+            reply_markup=whale_menu_keyboard(),
+        )
+        return
+
+    assets_map = await get_assets_map(session)
+    unknown = [t for t in tokens if t not in assets_map]
+    if unknown:
+        await message.answer(
+            f"❌ Not tracked: <code>{', '.join(unknown)}</code>\n\n"
+            f"Available: <code>{', '.join(sorted(assets_map.keys()))}</code>",
+            parse_mode="HTML",
+            reply_markup=whale_menu_keyboard(),
+        )
+        return
+
+    await set_user_scan_symbols(session, user.id, tokens)
+    await message.answer(
+        f"✅ Scan coins set to: <b>{', '.join(tokens)}</b>",
+        parse_mode="HTML",
+        reply_markup=whale_menu_keyboard(),
     )

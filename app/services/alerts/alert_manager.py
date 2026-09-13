@@ -135,6 +135,10 @@ async def check_all_alerts(session: AsyncSession):
                 )
                 if tx.get("value_usd"):
                     message += f"\n• ≈ ${tx['value_usd']:,.0f}"
+                direction = tx.get("direction", "TRANSFER")
+                if direction in ("BUY", "SELL"):
+                    arrow = "🟢" if direction == "BUY" else "🔴"
+                    message += f"\n• Direction: <b>{arrow} {direction}</b> (estimated)"
                 to_addr = tx.get("to", "")
                 if to_addr:
                     message += f"\n• To: <code>{to_addr}</code>"

@@ -91,6 +91,22 @@ Replaced the fixed BTC(+optional ETH) tracker with a provider-abstraction whale 
 - ETH + ERC-20 scanning requires `ETHERSCAN_API_KEY`; skips silently without it.
 - Whale scan job runs every 5 min to keep `whale_transactions` populated even without whale alerts; alert checks default back to it every 30s.
 
+### Enhancement — buy/sell direction + user-configured scan coins
+- New `app/services/whale_tracker/direction.py` — `classify_direction(chain, from, to)`:
+  BUY/SELL (high confidence) when a known DEX router (Uniswap V2/V3, Sushi, 1inch) is involved;
+  BUY/SELL (medium) on known major exchange wallet deposits/withdrawals; otherwise ⚪ Transfer (no claim).
+- Providers now extract BTC `from`/`to` (mempool/Blockstream `prevout`/`vout`) and tag every `WhaleTransfer`
+  with `direction` + `direction_confidence`; stored on `WhaleTransaction` and shown in `/whale`, 🐋 menu, and whale alerts.
+- New `WhalePreference` model + `whale_preferences` table; `get_user_scan_symbols()` / `set_user_scan_symbols()`
+  in `assets.py`. A user with no prefs scans the full registry.
+- New "🔧 Set scan coins" inline button (🐋 menu + `/whale`) → `WhaleStates.waiting_for_symbols` prompt;
+  accepts comma-separated symbols, `all`/`none` to reset; validates against the registry.
+- `whale_tracker` `_providers`/`fetch_all`/`get_whales`/`fetch_and_store` now accept `symbols` to restrict scanning.
+- `app/main.py` — `ensure_additive_columns()` idempotently adds `whale_transactions.direction`,
+  `direction_confidence` to existing DBs (create_all cannot alter existing tables).
+- Tests: `tests/test_whale.py` grown to 39 total (direction classifier, BTC address extraction,
+  ERC-20 DEX B/S, preference set/get, symbols-filtered store).
+
 ---
 
 ## Next up: Phase 2C — AI Trading Assistant

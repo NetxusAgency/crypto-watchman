@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
-from sqlalchemy import String, Integer, Float, Text, DateTime
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import String, Integer, Float, Text, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database.session import Base
 
 
@@ -43,7 +43,25 @@ class WhaleTransaction(Base):
     from_addr: Mapped[str | None] = mapped_column(Text, nullable=True)
     to_addr: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(String(50))
+    direction: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+    direction_confidence: Mapped[str | None] = mapped_column(String(10), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
 
 
-__all__ = ["Asset", "WhaleTransaction"]
+class WhalePreference(Base):
+    """Per-user override of which assets the whale scanner should monitor.
+
+    If a user has no rows here, the full asset registry is scanned.
+    """
+    __tablename__ = "whale_preferences"
+    __table_args__ = (UniqueConstraint("user_id", "symbol", name="uq_whale_pref_user_symbol"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    symbol: Mapped[str] = mapped_column(String(20), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+    user: Mapped["User"] = relationship(back_populates="whale_preferences")
+
+
+__all__ = ["Asset", "WhaleTransaction", "WhalePreference"]
