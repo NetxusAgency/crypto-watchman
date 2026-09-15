@@ -18,6 +18,8 @@ from app.services.whale_tracker.whale_tracker import whale_tracker
 from app.services.news.client import news_http
 from app.services.news import news_service
 from app.services.whale_tracker.assets import seed_assets
+from app.services.assistant.strategies import seed_preset_strategies
+from app.services.assistant.klines import kline_fetcher
 
 # Additive DB columns added after a table already exists (create_all cannot add
 # columns to an existing table). Each entry is applied idempotently at startup.
@@ -57,6 +59,15 @@ async def lifespan(app: FastAPI):
                 logger.info(f"Seeded {created} default asset registry rows.")
     except Exception as e:
         logger.warning(f"Asset registry seeding skipped: {e}")
+
+    # 1c. Seed preset trading strategies used by AI Trading Assistant
+    try:
+        async with async_session_maker() as session:
+            strat_created = await seed_preset_strategies(session)
+            if strat_created:
+                logger.info(f"Seeded {strat_created} preset trading strategies.")
+    except Exception as e:
+        logger.warning(f"Trading strategy seeding skipped: {e}")
 
     # 2. Local scheduler for checking alerts (runs when Celery isn't running)
     scheduler = AsyncIOScheduler()
@@ -175,6 +186,9 @@ async def lifespan(app: FastAPI):
 
     await news_http.close()
     logger.info("News HTTP client closed.")
+
+    await kline_fetcher.close()
+    logger.info("Assistant kline fetcher HTTP client closed.")
 
     await engine.dispose()
     logger.info("Database connection pool disposed.")

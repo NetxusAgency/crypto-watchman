@@ -14,9 +14,10 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     builder.button(text="🐋 Whales")
     builder.button(text="🧠 Digest")
     builder.button(text="📰 News")
+    builder.button(text="🎯 Assistant")
     builder.button(text="⚙️ Settings")
     builder.button(text="❓ Help")
-    builder.adjust(3, 3, 3)
+    builder.adjust(3, 3, 2, 2)
     return builder.as_markup(resize_keyboard=True, input_field_placeholder="Choose an option...")
 
 
@@ -118,5 +119,43 @@ def whale_menu_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="🔧 Set scan coins", callback_data="whale_configure")],
             [InlineKeyboardButton(text="◀ Back", callback_data="menu_main")],
+        ]
+    )
+
+
+def assistant_assets_keyboard(symbols: list[str]) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for sym in symbols:
+        builder.button(text=sym, callback_data=f"asst_sym:{sym}")
+    builder.adjust(2)
+    builder.row(InlineKeyboardButton(text="➕ Custom Coin", callback_data="asst_custom"))
+    builder.row(InlineKeyboardButton(text="◀ Back", callback_data="menu_main"))
+    return builder.as_markup()
+
+
+def assistant_timeframe_keyboard(symbol: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="⚡ 15m", callback_data=f"asst_tf:{symbol}:15m"),
+                InlineKeyboardButton(text="⏱ 1h", callback_data=f"asst_tf:{symbol}:1h"),
+            ],
+            [
+                InlineKeyboardButton(text="📊 4h", callback_data=f"asst_tf:{symbol}:4h"),
+                InlineKeyboardButton(text="📅 1d", callback_data=f"asst_tf:{symbol}:1d"),
+            ],
+            [InlineKeyboardButton(text="◀ Back", callback_data="asst_back_assets")],
+        ]
+    )
+
+
+def assistant_strategy_keyboard(symbol: str, timeframe: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📈 Trend Pullback", callback_data=f"asst_run:{symbol}:{timeframe}:trend_pullback")],
+            [InlineKeyboardButton(text="🚀 Breakout Momentum", callback_data=f"asst_run:{symbol}:{timeframe}:breakout")],
+            [InlineKeyboardButton(text="🔄 Mean Reversion", callback_data=f"asst_run:{symbol}:{timeframe}:mean_reversion")],
+            [InlineKeyboardButton(text="🧭 Full Diagnostic", callback_data=f"asst_run:{symbol}:{timeframe}:general")],
+            [InlineKeyboardButton(text="◀ Back", callback_data=f"asst_sym:{symbol}")],
         ]
     )

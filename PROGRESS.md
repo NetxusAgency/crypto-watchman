@@ -8,8 +8,8 @@ Full design lives in `PHASE_2_IMPLEMENTATION.md`.
 | Phase | Feature | Status |
 |-------|---------|--------|
 | 2A | AI News + Market Sentiment Engine | **Implemented & tested** |
-| 2B | Multi-Asset Whale Monitoring | **Implemented & tested** (this delivery) |
-| 2C | AI Trading Assistant | Not started |
+| 2B | Multi-Asset Whale Monitoring | **Implemented & tested** |
+| 2C | AI Trading Assistant | **Implemented & tested** (this delivery) |
 | 2D | Web3 Portfolio | Not started |
 | 2E | Telegram Mini App | Not started |
 | 2F | Opportunity Engine | Not started |
@@ -109,4 +109,34 @@ Replaced the fixed BTC(+optional ETH) tracker with a provider-abstraction whale 
 
 ---
 
-## Next up: Phase 2C — AI Trading Assistant
+## 2C — AI Trading Assistant ✅
+
+Built a quantitative and AI-driven trade analysis assistant that computes multi-timeframe indicators on factual market data, synthesizes structured setups (Entry, Stop Loss, Take Profit 1/2, Risk/Reward, Invalidation rules), and provides a guided interactive Telegram experience.
+
+### New files
+- `app/database/models/assistant.py` — `TradingStrategy`, `StrategyVersion`, and `TradeAnalysis`.
+- `app/services/assistant/`:
+  - `__init__.py` — package exports.
+  - `indicators.py` — pure-Python technical indicator engine: SMA, EMA, RSI (Wilder's smoothing), MACD (12, 26, 9), ATR (14), Bollinger Bands (20, 2), dynamic Support & Resistance pivot detection, and deterministic trend bias evaluation.
+  - `klines.py` — multi-timeframe candle fetcher (`15m`, `1h`, `4h`, `1d`) with Binance spot API -> TwelveData -> CoinGecko OHLC -> synthetic fallback.
+  - `strategies.py` — preset strategy definitions (*Trend Following / Pullback*, *Breakout & Momentum*, *Mean Reversion / Counter-Trend*, *Full Technical Diagnostic*) with DB seeding.
+  - `analyzer.py` — AI trade plan generator via `call_llm` (Groq/OpenAI) + strict JSON extraction + deterministic mathematical fallback engine.
+  - `assistant_service.py` — orchestration pipeline, resolution-aware caching (`TradeAnalysis`), and Telegram HTML card formatting.
+- `app/bot/handlers/assistant.py` — `/trade` and `/assistant` commands, custom coin FSM, timeframe & strategy selection callbacks, refresh analysis action.
+- `tests/test_assistant.py` — 15 unit tests for indicators, strategies, JSON parsing, fallback setups, and message rendering.
+
+### Modified files
+- `app/database/models/__init__.py` — import & export new assistant models; add relationships to `User`.
+- `app/services/market_digest/digest_service.py` — enhanced `call_llm` to accept custom `system_prompt`.
+- `app/bot/states.py` — added `AssistantStates.waiting_for_symbol`.
+- `app/bot/keyboards.py` — added `🎯 Assistant` button to main menu with updated layout, plus inline keyboard builders (`assistant_assets_keyboard`, `assistant_timeframe_keyboard`, `assistant_strategy_keyboard`).
+- `app/bot/handlers/menu.py` — added `🎯 Assistant` button handler and included it in FSM cancel set.
+- `app/bot/dispatcher.py` — registered `assistant.router`.
+- `app/main.py` — seed preset strategies on startup; gracefully close `kline_fetcher` on shutdown.
+
+### Tests
+- Full test suite: **54 tests passed in 24s** (`.\venv\Scripts\python.exe -m pytest tests -q`).
+
+---
+
+## Next up: Phase 2D — Web3 Portfolio

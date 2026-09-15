@@ -4,6 +4,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database.session import Base
 from app.database.models.news import NewsArticle, NewsAnalysis
 from app.database.models.whale import Asset, WhaleTransaction, WhalePreference
+from app.database.models.assistant import TradingStrategy, StrategyVersion, TradeAnalysis
 
 
 class User(Base):
@@ -20,6 +21,8 @@ class User(Base):
     notifications: Mapped[list["Notification"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     subscriptions: Mapped[list["Subscription"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     whale_preferences: Mapped[list["WhalePreference"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    strategies: Mapped[list["TradingStrategy"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    analyses: Mapped[list["TradeAnalysis"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class Portfolio(Base):
@@ -70,4 +73,8 @@ class Subscription(Base):
     user: Mapped["User"] = relationship(back_populates="subscriptions")
 
 
-__all__ = ["User", "Portfolio", "Alert", "Notification", "Subscription", "NewsArticle", "NewsAnalysis", "Asset", "WhaleTransaction", "WhalePreference"]
+__all__ = [
+    "User", "Portfolio", "Alert", "Notification", "Subscription",
+    "NewsArticle", "NewsAnalysis", "Asset", "WhaleTransaction", "WhalePreference",
+    "TradingStrategy", "StrategyVersion", "TradeAnalysis",
+]

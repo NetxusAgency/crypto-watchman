@@ -17,7 +17,7 @@ from app.services.whale_tracker.assets import (
 from app.bot.handlers.whale import format_whales
 from app.bot.keyboards import (
     main_menu_keyboard, portfolio_actions_keyboard, alerts_actions_keyboard,
-    back_button, cancel_button, whale_menu_keyboard,
+    back_button, cancel_button, whale_menu_keyboard, assistant_assets_keyboard,
 )
 from app.bot.states import PortfolioStates, AlertStates, WhaleStates
 
@@ -223,6 +223,24 @@ async def menu_news(message: Message, session: AsyncSession):
     await message.answer(report, parse_mode="HTML", reply_markup=back_button())
 
 
+@router.message(F.text == "🎯 Assistant")
+async def menu_assistant(message: Message, session: AsyncSession):
+    user = await db_service.get_or_create_user(
+        session=session,
+        telegram_id=message.from_user.id,
+        username=message.from_user.username,
+    )
+    portfolio = await db_service.get_portfolio(session, user.id)
+    symbols = [p.symbol for p in portfolio]
+    text = (
+        "🎯 <b>AI Trading Assistant</b>\n\n"
+        "Multi-timeframe OHLCV market analysis, indicator confluence (EMA, RSI, MACD, ATR), "
+        "and disciplined risk management trade plans.\n\n"
+        "Choose an asset from your portfolio or test any custom coin:"
+    )
+    await message.answer(text, reply_markup=assistant_assets_keyboard(symbols), parse_mode="HTML")
+
+
 @router.message(F.text == "⚙️ Settings")
 async def menu_settings(message: Message, session: AsyncSession):
     user = await db_service.get_or_create_user(
@@ -267,7 +285,7 @@ async def menu_help(message: Message):
     )
 
 
-@router.message(StateFilter("*"), F.text.in_({"📊 Portfolio", "🔔 Alerts", "📈 Analytics", "📢 Sentiment", "🐋 Whales", "🧠 Digest", "📰 News", "⚙️ Settings", "❓ Help"}))
+@router.message(StateFilter("*"), F.text.in_({"📊 Portfolio", "🔔 Alerts", "📈 Analytics", "📢 Sentiment", "🐋 Whales", "🧠 Digest", "📰 News", "🎯 Assistant", "⚙️ Settings", "❓ Help"}))
 async def fsm_cancel_to_menu(message: Message, session: AsyncSession, state: FSMContext):
     await state.clear()
     text = message.text
@@ -285,6 +303,8 @@ async def fsm_cancel_to_menu(message: Message, session: AsyncSession, state: FSM
         await menu_digest(message, session)
     elif text == "📰 News":
         await menu_news(message, session)
+    elif text == "🎯 Assistant":
+        await menu_assistant(message, session)
     elif text == "⚙️ Settings":
         await menu_settings(message, session)
     elif text == "❓ Help":

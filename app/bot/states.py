@@ -13,3 +13,7 @@ class AlertStates(StatesGroup):
 
 class WhaleStates(StatesGroup):
     waiting_for_symbols = State()
+
+
+class AssistantStates(StatesGroup):
+    waiting_for_symbol = State()

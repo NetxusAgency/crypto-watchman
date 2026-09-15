@@ -1,7 +1,9 @@
 from aiogram import Bot, Dispatcher
 from app.core.config import settings
 from app.bot.middlewares.db import DbSessionMiddleware
-from app.bot.handlers import base, portfolio, alerts, analytics, sentiment, whale, digest, news, menu, callbacks
+from app.bot.handlers import (
+    base, portfolio, alerts, analytics, sentiment, whale, digest, news, assistant, menu, callbacks
+)
 
 # Initialize Bot
 bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
@@ -21,5 +23,6 @@ dp.include_router(sentiment.router)
 dp.include_router(whale.router)
 dp.include_router(digest.router)
 dp.include_router(news.router)
+dp.include_router(assistant.router)
 dp.include_router(menu.router)
 dp.include_router(callbacks.router)
