@@ -1,6 +1,6 @@
 import logging
 
-from aiogram import F, Router
+from aiogram import F, Router, html
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -28,12 +28,11 @@ router = Router()
 
 @router.message(Command(commands=["trade", "assistant"]))
 async def cmd_assistant(message: Message, session: AsyncSession):
-    user = await db_service.get_user(session, message.from_user.id)
-    if not user:
-        user = await db_service.create_user(
-            session, message.from_user.id, message.from_user.username
-        )
-
+    user = await db_service.get_or_create_user(
+        session=session,
+        telegram_id=message.from_user.id,
+        username=message.from_user.username,
+    )
     portfolio = await db_service.get_portfolio(session, user.id)
     symbols = [p.symbol for p in portfolio]
 
@@ -131,10 +130,12 @@ async def cb_run_analysis(callback: CallbackQuery, session: AsyncSession):
 
     # Status notice while computing
     await callback.message.edit_text(
-        f"⏳ <i>Analyzing <b>{symbol}</b> ({timeframe.upper()}) using {strat_def.name}...\n"
-        f"Fetching OHLCV candles, computing RSI/EMA/MACD/ATR & generating trade plan.</i>",
+        f"⏳ <i>Analyzing <b>{html.quote(symbol)}</b> ({html.quote(timeframe.upper())}) "
+        f"using {html.quote(strat_def.name)}...\n"
+        f"Fetching OHLCV candles, computing RSI/EMA/MACD/ATR &amp; generating trade plan.</i>",
         parse_mode="HTML",
     )
+    await callback.answer()
 
     try:
         setup = await get_or_create_trade_setup(
@@ -173,11 +174,9 @@ async def cb_run_analysis(callback: CallbackQuery, session: AsyncSession):
         )
         await callback.message.edit_text(msg_text, reply_markup=actions, parse_mode="HTML")
     except Exception as e:
-        logger.error(f"Failed to generate assistant analysis for {symbol}: {e}")
+        logger.error(f"Failed to generate assistant analysis for {symbol}: {e}", exc_info=True)
         await callback.message.edit_text(
-            f"❌ An error occurred while analyzing <b>{symbol}</b>. Please try again in a moment.",
+            f"❌ An error occurred while analyzing <b>{html.quote(symbol)}</b>. Please try again in a moment.",
             reply_markup=back_button(),
             parse_mode="HTML",
         )
-
-    await callback.answer()

@@ -1,3 +1,4 @@
+import html
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -128,7 +129,7 @@ async def get_or_create_trade_setup(
 def format_trade_setup_message(setup: TradeSetup) -> str:
     """Format TradeSetup into a clean, professional Telegram HTML card."""
     bias_emoji = "🟢" if setup.bias == "BULLISH" else ("🔴" if setup.bias == "BEARISH" else "⚪")
-    bias_label = f"{bias_emoji} <b>{setup.bias.title()}</b> ({setup.confidence}% confidence)"
+    bias_label = f"{bias_emoji} <b>{html.escape(setup.bias.title())}</b> ({setup.confidence}% confidence)"
 
     p = setup.current_price
     sl_pct = ((setup.stop_loss - p) / p) * 100 if p else 0.0
@@ -144,11 +145,11 @@ def format_trade_setup_message(setup: TradeSetup) -> str:
     atr = ind.get("atr_14")
     atr_str = f"${atr:,.2f}" if atr is not None else "N/A"
 
-    reason_lines = "\n".join([f"• {r}" for r in setup.reasoning])
+    reason_lines = "\n".join([f"• {html.escape(str(r))}" for r in setup.reasoning])
 
     return (
-        f"🎯 <b>AI Trading Assistant — {setup.symbol} ({setup.timeframe.upper()})</b>\n\n"
-        f"<b>Strategy:</b> {setup.strategy_name}\n"
+        f"🎯 <b>AI Trading Assistant — {html.escape(setup.symbol)} ({html.escape(setup.timeframe.upper())})</b>\n\n"
+        f"<b>Strategy:</b> {html.escape(setup.strategy_name)}\n"
         f"<b>Market Bias:</b> {bias_label}\n\n"
         f"💰 <b>Current Price:</b> <code>${p:,.4f}</code>\n"
         f"📍 <b>Entry Zone:</b> <code>${setup.entry_min:,.4f} – ${setup.entry_max:,.4f}</code>\n"
@@ -163,6 +164,6 @@ def format_trade_setup_message(setup: TradeSetup) -> str:
         f"💡 <b>Setup Rationale:</b>\n"
         f"{reason_lines}\n\n"
         f"⚠️ <b>Invalidation Rule:</b>\n"
-        f"{setup.invalidation}\n\n"
+        f"{html.escape(str(setup.invalidation))}\n\n"
         f"<i>⚠️ Strictly for analysis and educational reference. Never risk more than you can afford to lose.</i>"
     )

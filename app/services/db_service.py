@@ -30,6 +30,14 @@ async def get_or_create_user(session: AsyncSession, telegram_id: int, username: 
         
     return user
 
+
+async def get_user(session: AsyncSession, telegram_id: int) -> User | None:
+    """Retrieve user by telegram_id without modifying or creating."""
+    stmt = select(User).where(User.telegram_id == telegram_id)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 async def get_portfolio(session: AsyncSession, user_id: int) -> list[Portfolio]:
     """Retrieve all assets in a user's portfolio."""
     stmt = select(Portfolio).where(Portfolio.user_id == user_id)
