@@ -137,6 +137,24 @@ Built a quantitative and AI-driven trade analysis assistant that computes multi-
 ### Tests
 - Full test suite: **54 tests passed in 24s** (`.\venv\Scripts\python.exe -m pytest tests -q`).
 
+### Fix (2026-09-16) — HTML-escaping in analysis card
+- Symptom: after selecting an analysis framework, the bot "stopped" and never sent the trade setup card.
+- Root cause: AI-generated `reasoning`/`invalidation` text leaked raw `<`/`>` (e.g. `EMA 20 < EMA 50`), which Telegram's HTML parse mode rejects (`can't parse entities: Unsupported start tag ""`). The final `edit_text` in `cb_run_analysis` raised, so nothing was rendered.
+- Fix:
+  - `app/services/assistant/assistant_service.py` — `format_trade_setup_message` now HTML-escapes reasoning, invalidation, symbol, timeframe, strategy name, and bias.
+  - `app/bot/handlers/assistant.py` — escape symbol/timeframe/strategy name in the "⏳ Analyzing…" status text; call `callback.answer()` before the long analysis (button no longer spins) with `&amp;` in the status copy; error path escapes symbol too.
+- Verified live: reproduced the exact card against the live bot — `editMessageText` returns 200 (was 400). Full suite still **54 passed**.
+
+### 2026-09-16 — User-defined custom strategies
+- Users can now create their own trading strategies through the Assistant flow: tap **➕ New Strategy** from the framework selection screen, send a name, then describe the rules.
+- The AI receives the custom rules verbatim when building the trade plan — works exactly like the built-in frameworks.
+- Strategy key scheme: `custom_{id}` where id is the `TradingStrategy` primary key.
+- New DB helpers in `strategies.py`: `add_user_strategy`, `get_user_strategies`, `delete_user_strategy`, `get_strategy_definition_any` (async, resolves both presets and custom rows), `is_custom_key`, `strategy_definition_from_row`.
+- `assistant_service.get_or_create_trade_setup` now uses `get_strategy_definition_any` so custom strategy names appear in the trade card.
+- `asst_tf` handler now fetches the user's custom strategies and passes them to the keyboard builder; `asst_new_strat` enters a two-step FSM (`waiting_for_strategy_name` → `waiting_for_strategy_rules`); `asst_manage_strats` shows a list with delete buttons; `asst_del:` removes a strategy and refreshes the list.
+- `assistant_strategy_keyboard` in `keyboards.py` extended: shows custom strategies as ⭐ entries between the four presets and the ➕ button; `assistant_manage_keyboard` added for the management screen.
+- Added 5 new unit tests (is_custom_key, from_row, get_definition_any fallback); full suite: **59 passed in 17.8s**.
+
 ---
 
 ## Next up: Phase 2D — Web3 Portfolio

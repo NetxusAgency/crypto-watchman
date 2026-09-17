@@ -10,7 +10,7 @@ from app.database.models import TradeAnalysis
 from app.services.assistant.analyzer import TradeSetup, analyze_market_setup
 from app.services.assistant.indicators import compute_all_indicators
 from app.services.assistant.klines import kline_fetcher
-from app.services.assistant.strategies import get_strategy_definition
+from app.services.assistant.strategies import get_strategy_definition_any
 
 logger = logging.getLogger("crypto_watchman.assistant_service")
 
@@ -65,7 +65,7 @@ async def get_or_create_trade_setup(
             try:
                 ind_data = json.loads(cached.indicators_snapshot) if cached.indicators_snapshot else {}
                 reasons = json.loads(cached.reasoning) if cached.reasoning.startswith("[") else [cached.reasoning]
-                strat_def = get_strategy_definition(cached.strategy_key)
+                strat_def = await get_strategy_definition_any(session, cached.strategy_key, user_id)
                 return TradeSetup(
                     symbol=cached.symbol,
                     timeframe=cached.timeframe,
@@ -90,7 +90,7 @@ async def get_or_create_trade_setup(
     # 2. Fetch candles and compute indicators
     candles = await kline_fetcher.fetch_candles(sym_clean, tf_clean, limit=100)
     snapshot = compute_all_indicators(sym_clean, tf_clean, candles)
-    strategy = get_strategy_definition(strategy_key)
+    strategy = await get_strategy_definition_any(session, strategy_key, user_id)
 
     # 3. Run AI analysis
     setup = await analyze_market_setup(snapshot, strategy, candles)

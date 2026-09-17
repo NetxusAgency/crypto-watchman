@@ -149,13 +149,36 @@ def assistant_timeframe_keyboard(symbol: str) -> InlineKeyboardMarkup:
     )
 
 
-def assistant_strategy_keyboard(symbol: str, timeframe: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📈 Trend Pullback", callback_data=f"asst_run:{symbol}:{timeframe}:trend_pullback")],
-            [InlineKeyboardButton(text="🚀 Breakout Momentum", callback_data=f"asst_run:{symbol}:{timeframe}:breakout")],
-            [InlineKeyboardButton(text="🔄 Mean Reversion", callback_data=f"asst_run:{symbol}:{timeframe}:mean_reversion")],
-            [InlineKeyboardButton(text="🧭 Full Diagnostic", callback_data=f"asst_run:{symbol}:{timeframe}:general")],
-            [InlineKeyboardButton(text="◀ Back", callback_data=f"asst_sym:{symbol}")],
-        ]
-    )
+def assistant_strategy_keyboard(
+    symbol: str,
+    timeframe: str,
+    user_strategies: list | None = None,
+) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text="📈 Trend Pullback", callback_data=f"asst_run:{symbol}:{timeframe}:trend_pullback")],
+        [InlineKeyboardButton(text="🚀 Breakout Momentum", callback_data=f"asst_run:{symbol}:{timeframe}:breakout")],
+        [InlineKeyboardButton(text="🔄 Mean Reversion", callback_data=f"asst_run:{symbol}:{timeframe}:mean_reversion")],
+        [InlineKeyboardButton(text="🧭 Full Diagnostic", callback_data=f"asst_run:{symbol}:{timeframe}:general")],
+    ]
+    for s in (user_strategies or [])[:8]:
+        label = s.name if len(s.name) <= 32 else f"{s.name[:31]}…"
+        rows.append([
+            InlineKeyboardButton(text=f"⭐ {label}", callback_data=f"asst_run:{symbol}:{timeframe}:{s.key}")
+        ])
+    rows.append([InlineKeyboardButton(text="➕ New Strategy", callback_data="asst_new_strat")])
+    if user_strategies:
+        rows.append([InlineKeyboardButton(text="⚙️ Manage Strategies", callback_data="asst_manage_strats")])
+    rows.append([InlineKeyboardButton(text="◀ Back", callback_data=f"asst_sym:{symbol}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def assistant_manage_keyboard(strategies: list) -> InlineKeyboardMarkup:
+    rows = []
+    for s in (strategies or [])[:12]:
+        label = s.name if len(s.name) <= 30 else f"{s.name[:29]}…"
+        rows.append([
+            InlineKeyboardButton(text=f"⭐ {label}", callback_data="asst_noop"),
+            InlineKeyboardButton(text="🗑 Delete", callback_data=f"asst_del:{s.key}"),
+        ])
+    rows.append([InlineKeyboardButton(text="◀ Back", callback_data="asst_back_strats")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)

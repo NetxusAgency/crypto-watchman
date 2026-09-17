@@ -5,7 +5,11 @@ from app.services.assistant.assistant_service import (
 from app.services.assistant.klines import kline_fetcher
 from app.services.assistant.strategies import (
     PRESET_STRATEGIES,
+    add_user_strategy,
+    delete_user_strategy,
     get_strategy_definition,
+    get_strategy_definition_any,
+    get_user_strategies,
     seed_preset_strategies,
 )
 
@@ -15,5 +19,9 @@ __all__ = [
     "kline_fetcher",
     "PRESET_STRATEGIES",
     "get_strategy_definition",
+    "get_strategy_definition_any",
+    "get_user_strategies",
+    "add_user_strategy",
+    "delete_user_strategy",
     "seed_preset_strategies",
 ]

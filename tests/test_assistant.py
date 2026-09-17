@@ -1,4 +1,7 @@
+import asyncio
 import math
+from types import SimpleNamespace
+
 from app.services.assistant.analyzer import _extract_json, generate_fallback_setup
 from app.services.assistant.assistant_service import format_trade_setup_message
 from app.services.assistant.indicators import (
@@ -17,6 +20,9 @@ from app.services.assistant.strategies import (
     PRESET_STRATEGIES,
     STRATEGIES_MAP,
     get_strategy_definition,
+    get_strategy_definition_any,
+    is_custom_key,
+    strategy_definition_from_row,
 )
 
 
@@ -123,6 +129,33 @@ class TestStrategies:
     def test_get_strategy_fallback(self):
         s = get_strategy_definition("non_existent_key")
         assert s.key == "general"
+
+    def test_is_custom_key(self):
+        assert is_custom_key("custom_7")
+        assert not is_custom_key("general")
+        assert not is_custom_key("")
+
+    def test_strategy_definition_from_row(self):
+        row = SimpleNamespace(
+            key="custom_7",
+            name="Keltner Momentum",
+            description="My rules",
+            timeframes="15m,1h,4h,1d",
+            indicators="EMA,RSI,MACD,ATR",
+            rules="Go long when EMA 20 crosses above EMA 50.",
+        )
+        d = strategy_definition_from_row(row)
+        assert d.key == "custom_7"
+        assert d.name == "Keltner Momentum"
+        assert d.rules == row.rules
+
+    def test_get_definition_any_preset(self):
+        d = asyncio.run(get_strategy_definition_any(None, "breakout"))
+        assert d.key == "breakout"
+
+    def test_get_definition_any_custom_without_session(self):
+        d = asyncio.run(get_strategy_definition_any(None, "custom_999"))
+        assert d.key == "general"
 
 
 class TestAnalyzer:
@@ -237,3 +270,34 @@ class TestFormatting:
         assert "RSI (14):" in formatted
         assert "Invalidation Rule:" in formatted
         assert "Strictly for analysis and educational reference" in formatted
+
+    def test_format_escapes_unsafe_html(self):
+        snapshot = TechnicalSnapshot(
+            symbol="BTC",
+            timeframe="1h",
+            current_price=64000.0,
+            ema_20=63800.0,
+            ema_50=63500.0,
+            sma_200=60000.0,
+            rsi_14=58.5,
+            macd_line=25.0,
+            macd_signal=15.0,
+            macd_hist=10.0,
+            atr_14=600.0,
+            bb_upper=65000.0,
+            bb_middle=63800.0,
+            bb_lower=62600.0,
+            support_levels=[63200.0],
+            resistance_levels=[65500.0],
+            trend_bias="BULLISH",
+        )
+        setup = generate_fallback_setup(snapshot, get_strategy_definition("general"))
+        setup.reasoning = ["EMA 20 (76173) < EMA 50 (76746)"]
+        setup.invalidation = "Close > 77000 invalidates <b>short</b>"
+
+        formatted = format_trade_setup_message(setup)
+
+        assert "&lt;" in formatted
+        assert "&gt;" in formatted
+        assert "EMA 20 (76173) < EMA 50" not in formatted
+        assert "invalidates <b>short</b>" not in formatted

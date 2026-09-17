@@ -17,3 +17,5 @@ class WhaleStates(StatesGroup):
 
 class AssistantStates(StatesGroup):
     waiting_for_symbol = State()
+    waiting_for_strategy_name = State()
+    waiting_for_strategy_rules = State()

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import Sequence
-from sqlalchemy import select
+from sqlalchemy import select, delete, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.models import TradingStrategy
 
@@ -104,3 +104,117 @@ async def seed_preset_strategies(session: AsyncSession) -> int:
 def get_strategy_definition(key: str) -> StrategyDefinition:
     """Retrieve strategy definition by key, falling back to general diagnostic."""
     return STRATEGIES_MAP.get(key, STRATEGIES_MAP["general"])
+
+
+def is_custom_key(key: str) -> bool:
+    """Return True if the key refers to a user-defined (non-system) strategy."""
+    return bool(key) and key.startswith("custom_")
+
+
+def strategy_definition_from_row(row: TradingStrategy) -> StrategyDefinition:
+    """Build a StrategyDefinition from a TradingStrategy DB row."""
+    return StrategyDefinition(
+        key=row.key,
+        name=row.name,
+        description=row.description or "",
+        timeframes=row.timeframes,
+        indicators=row.indicators,
+        rules=row.rules,
+    )
+
+
+async def get_strategy_definition_any(
+    session: AsyncSession,
+    key: str,
+    user_id: int | None = None,
+) -> StrategyDefinition:
+    """Resolve a strategy definition from presets or (for custom keys) the DB.
+
+    Falls back to the general diagnostic when nothing matches.
+    """
+    if key in STRATEGIES_MAP:
+        return STRATEGIES_MAP[key]
+
+    if is_custom_key(key) and session is not None:
+        stmt = select(TradingStrategy).where(
+            and_(
+                TradingStrategy.key == key,
+                or_(
+                    TradingStrategy.user_id == user_id,
+                    TradingStrategy.is_system == True,
+                ),
+            )
+        )
+        result = await session.execute(stmt)
+        row = result.scalar_one_or_none()
+        if row is not None:
+            return strategy_definition_from_row(row)
+
+    return STRATEGIES_MAP["general"]
+
+
+async def add_user_strategy(
+    session: AsyncSession,
+    user_id: int,
+    name: str,
+    rules: str,
+    description: str = "",
+    timeframes: str = "15m,1h,4h,1d",
+    indicators: str = "EMA,RSI,MACD,ATR",
+    version: int = 1,
+) -> TradingStrategy:
+    """Create a user-defined strategy and assign it a unique custom key."""
+    strategy = TradingStrategy(
+        user_id=user_id,
+        key="_pending",
+        name=name.strip(),
+        description=description.strip(),
+        timeframes=timeframes,
+        indicators=indicators,
+        rules=rules.strip(),
+        is_system=False,
+        version=version,
+    )
+    session.add(strategy)
+    await session.flush()
+    strategy.key = f"custom_{strategy.id}"
+    await session.commit()
+    await session.refresh(strategy)
+    return strategy
+
+
+async def get_user_strategies(
+    session: AsyncSession,
+    user_id: int,
+) -> list[TradingStrategy]:
+    """Return a user's custom strategies, newest first."""
+    stmt = (
+        select(TradingStrategy)
+        .where(
+            and_(
+                TradingStrategy.user_id == user_id,
+                TradingStrategy.is_system == False,
+            )
+        )
+        .order_by(TradingStrategy.id.desc())
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def delete_user_strategy(
+    session: AsyncSession,
+    user_id: int,
+    key: str,
+) -> bool:
+    """Delete a user's custom strategy by key. Returns True if deleted."""
+    stmt = delete(TradingStrategy).where(
+        and_(
+            TradingStrategy.user_id == user_id,
+            TradingStrategy.key == key,
+            TradingStrategy.is_system == False,
+        )
+    )
+    result = await session.execute(stmt)
+    await session.commit()
+    return result.rowcount > 0
