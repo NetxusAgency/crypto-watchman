@@ -20,6 +20,7 @@ from app.services.news import news_service
 from app.services.whale_tracker.assets import seed_assets
 from app.services.assistant.strategies import seed_preset_strategies
 from app.services.assistant.klines import kline_fetcher
+from app.services.wallet import wallet_service
 
 # Additive DB columns added after a table already exists (create_all cannot add
 # columns to an existing table). Each entry is applied idempotently at startup.
@@ -110,12 +111,21 @@ async def lifespan(app: FastAPI):
         async with async_session_maker() as session:
             await whale_tracker.fetch_and_store(session)
 
+    async def run_wallet_refresh():
+        try:
+            refreshed = await wallet_service.refresh_all_wallets(async_session_maker)
+            if refreshed:
+                logger.info(f"Refreshed balances for {refreshed} connected wallets.")
+        except Exception as e:
+            logger.warning(f"Wallet background refresh failed: {e}")
+
     scheduler.add_job(run_alert_check, "interval", seconds=30)
     scheduler.add_job(run_listing_check, "interval", minutes=2)
     scheduler.add_job(run_daily_digest, "cron", hour=9, minute=0)
     scheduler.add_job(run_news_refresh, "interval", minutes=settings.NEWS_REFRESH_MINUTES)
     scheduler.add_job(run_news_cleanup, "cron", hour="*/6", minute=5)
     scheduler.add_job(run_whale_scan, "interval", minutes=settings.WHALE_SCAN_MINUTES)
+    scheduler.add_job(run_wallet_refresh, "interval", minutes=settings.WALLET_REFRESH_MINUTES)
     scheduler.start()
     logger.info("Started internal background scheduler (alerts 30s, listings 2m, digest daily at 09:00, news 10m, whales 5m).")
 
@@ -189,6 +199,9 @@ async def lifespan(app: FastAPI):
 
     await kline_fetcher.close()
     logger.info("Assistant kline fetcher HTTP client closed.")
+
+    await wallet_service.close_wallet_provider()
+    logger.info("Wallet provider HTTP client closed.")
 
     await engine.dispose()
     logger.info("Database connection pool disposed.")

@@ -5,6 +5,7 @@ from app.database.session import Base
 from app.database.models.news import NewsArticle, NewsAnalysis
 from app.database.models.whale import Asset, WhaleTransaction, WhalePreference
 from app.database.models.assistant import TradingStrategy, StrategyVersion, TradeAnalysis
+from app.database.models.wallet import Wallet, WalletBalance
 
 
 class User(Base):
@@ -23,6 +24,7 @@ class User(Base):
     whale_preferences: Mapped[list["WhalePreference"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     strategies: Mapped[list["TradingStrategy"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     analyses: Mapped[list["TradeAnalysis"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    wallets: Mapped[list["Wallet"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class Portfolio(Base):
@@ -77,4 +79,5 @@ __all__ = [
     "User", "Portfolio", "Alert", "Notification", "Subscription",
     "NewsArticle", "NewsAnalysis", "Asset", "WhaleTransaction", "WhalePreference",
     "TradingStrategy", "StrategyVersion", "TradeAnalysis",
+    "Wallet", "WalletBalance",
 ]

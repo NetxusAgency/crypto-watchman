@@ -43,10 +43,14 @@ class Settings(BaseSettings):
     COINGECKO_API_KEY: str | None = None
     TWELVEDATA_API_KEY: str | None = None
     ETHERSCAN_API_KEY: str | None = None
+    COVALENT_API_KEY: str | None = None
     OPENAI_API_KEY: str | None = None
     OPENROUTER_API_KEY: str | None = None
     GROQ_API_KEY: str | None = None
     GROQ_MODEL: str = "openai/gpt-oss-20b"
+
+    # Web3 wallet monitoring (Phase 2D)
+    WALLET_REFRESH_MINUTES: int = Field(default=30, ge=5)
 
     # AI News engine
     NEWS_RETENTION_HOURS: int = Field(default=48, ge=1)

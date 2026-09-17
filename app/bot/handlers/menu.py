@@ -15,6 +15,7 @@ from app.services.whale_tracker.assets import (
     get_assets_map,
 )
 from app.bot.handlers.whale import format_whales
+from app.bot.handlers.wallet import wallet_panel
 from app.bot.keyboards import (
     main_menu_keyboard, portfolio_actions_keyboard, alerts_actions_keyboard,
     back_button, cancel_button, whale_menu_keyboard, assistant_assets_keyboard,
@@ -193,6 +194,12 @@ async def menu_whale(message: Message, session: AsyncSession):
     await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=whale_menu_keyboard())
 
 
+@router.message(F.text == "👛 Wallet")
+async def menu_wallet(message: Message, session: AsyncSession):
+    text, keyboard = await wallet_panel(session, message.from_user.id)
+    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+
+
 @router.message(F.text == "🧠 Digest")
 async def menu_digest(message: Message, session: AsyncSession):
     user = await db_service.get_or_create_user(
@@ -285,7 +292,7 @@ async def menu_help(message: Message):
     )
 
 
-@router.message(StateFilter("*"), F.text.in_({"📊 Portfolio", "🔔 Alerts", "📈 Analytics", "📢 Sentiment", "🐋 Whales", "🧠 Digest", "📰 News", "🎯 Assistant", "⚙️ Settings", "❓ Help"}))
+@router.message(StateFilter("*"), F.text.in_({"📊 Portfolio", "🔔 Alerts", "📈 Analytics", "📢 Sentiment", "🐋 Whales", "👛 Wallet", "🧠 Digest", "📰 News", "🎯 Assistant", "⚙️ Settings", "❓ Help"}))
 async def fsm_cancel_to_menu(message: Message, session: AsyncSession, state: FSMContext):
     await state.clear()
     text = message.text
@@ -299,6 +306,8 @@ async def fsm_cancel_to_menu(message: Message, session: AsyncSession, state: FSM
         await menu_sentiment(message, session)
     elif text == "🐋 Whales":
         await menu_whale(message, session)
+    elif text == "👛 Wallet":
+        await menu_wallet(message, session)
     elif text == "🧠 Digest":
         await menu_digest(message, session)
     elif text == "📰 News":

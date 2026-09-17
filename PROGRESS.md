@@ -171,6 +171,33 @@ Built a quantitative and AI-driven trade analysis assistant that computes multi-
 - `_fallback_document_split` now also recognizes numbered headings (`1. Momentum Breakout`) and Markdown headings with cleaner name extraction.
 - 3 new unit tests; full suite: **78 passed in 13.5s**.
 
+## 2D — Web3 Portfolio ✅
+
+### Scope
+- Connect **public EVM wallet addresses only** (never seed/private keys). Balances aggregated for trading/analysis display in Telegram.
+
+### New files
+- `app/database/models/wallet.py` — `Wallet` (user_id, address, network, label, total_value_usd) + `WalletBalance` (per-token quantity/price/value), unique per (user, network, address).
+- `app/services/wallet/providers.py` — `WalletProvider` abstraction: `CovalentWalletProvider` (multi-chain, COVALENT_API_KEY) + `PublicRpcProvider` keyless fallback (ETH native balance via public RPC + CoinGecko price). `normalize_network`, `is_valid_address`, `parse_covalent_items`.
+- `app/services/wallet/wallet_service.py` — add/remove/list wallets, `refresh_wallet`, `refresh_all_wallets`, `format_wallet_summary`.
+- `app/services/wallet/__init__.py`.
+- `app/bot/handlers/wallet.py` — `/wallet` command + inline flow: connect (FSM `WalletStates.waiting_for_address`, accepts `ADDRESS [network] [label]`), list/remove with confirm, refresh.
+
+### Modified files
+- `app/core/config.py` — `COVALENT_API_KEY`, `WALLET_REFRESH_MINUTES` (default 30, min 5).
+- `app/database/models/__init__.py` — register `Wallet`/`WalletBalance` + `User.wallets` relationship.
+- `app/bot/keyboards.py` — 👛 Wallet main-menu button (layout 3/3/3/2), `wallet_menu_keyboard`, `wallet_remove_list_keyboard`, `wallet_remove_confirm_keyboard`.
+- `app/bot/states.py` — `WalletStates.waiting_for_address`.
+- `app/bot/handlers/menu.py` — 👛 Wallet menu handler + FSM cancel set.
+- `app/bot/dispatcher.py` — register wallet router.
+- `app/main.py` — background `run_wallet_refresh` job (every `WALLET_REFRESH_MINUTES`); close wallet provider on shutdown.
+
+### Behavior
+- Default network = `ethereum`; supported: ethereum, polygon, bsc, arbitrum, optimism, avalanche, base.
+- Without `COVALENT_API_KEY` the fallback shows the native ETH balance only (tokens need the key).
+- Summary shows per-wallet total USD + top-10 assets with values; Mini App visualization planned in Phase 2E.
+- 10 new unit tests (network aliases, address validation, Covalent payload parsing, summary formatting); full suite: **88 passed in 10.5s**.
+
 ---
 
 ## Next up: Phase 2D — Web3 Portfolio

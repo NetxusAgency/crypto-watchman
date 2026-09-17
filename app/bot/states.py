@@ -15,6 +15,10 @@ class WhaleStates(StatesGroup):
     waiting_for_symbols = State()
 
 
+class WalletStates(StatesGroup):
+    waiting_for_address = State()
+
+
 class AssistantStates(StatesGroup):
     waiting_for_symbol = State()
     waiting_for_strategy_name = State()

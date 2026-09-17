@@ -12,12 +12,13 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     builder.button(text="📈 Analytics")
     builder.button(text="📢 Sentiment")
     builder.button(text="🐋 Whales")
+    builder.button(text="👛 Wallet")
     builder.button(text="🧠 Digest")
     builder.button(text="📰 News")
     builder.button(text="🎯 Assistant")
     builder.button(text="⚙️ Settings")
     builder.button(text="❓ Help")
-    builder.adjust(3, 3, 2, 2)
+    builder.adjust(3, 3, 3, 2)
     return builder.as_markup(resize_keyboard=True, input_field_placeholder="Choose an option...")
 
 
@@ -119,6 +120,37 @@ def whale_menu_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="🔧 Set scan coins", callback_data="whale_configure")],
             [InlineKeyboardButton(text="◀ Back", callback_data="menu_main")],
+        ]
+    )
+
+
+def wallet_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Connect Wallet", callback_data="wallet_add")],
+            [
+                InlineKeyboardButton(text="✖ Remove Wallet", callback_data="wallet_list"),
+                InlineKeyboardButton(text="🔄 Refresh", callback_data="wallet_refresh"),
+            ],
+            [InlineKeyboardButton(text="◀ Back", callback_data="menu_main")],
+        ]
+    )
+
+
+def wallet_remove_list_keyboard(wallets: list) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for w in wallets:
+        builder.button(text=f"✖ {w.network} · {w.address[:6]}…{w.address[-4:]}", callback_data=f"wallet_remove:{w.id}")
+    builder.adjust(1)
+    builder.row(InlineKeyboardButton(text="◀ Back", callback_data="wallet_back"))
+    return builder.as_markup()
+
+
+def wallet_remove_confirm_keyboard(wallet_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Yes, remove", callback_data=f"wallet_del:{wallet_id}")],
+            [InlineKeyboardButton(text="❌ No", callback_data="wallet_back")],
         ]
     )
 
