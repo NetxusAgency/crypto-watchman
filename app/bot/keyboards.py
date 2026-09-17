@@ -166,6 +166,7 @@ def assistant_strategy_keyboard(
             InlineKeyboardButton(text=f"⭐ {label}", callback_data=f"asst_run:{symbol}:{timeframe}:{s.key}")
         ])
     rows.append([InlineKeyboardButton(text="➕ New Strategy", callback_data="asst_new_strat")])
+    rows.append([InlineKeyboardButton(text="📄 Import Strategy Document", callback_data="asst_import_doc")])
     if user_strategies:
         rows.append([InlineKeyboardButton(text="⚙️ Manage Strategies", callback_data="asst_manage_strats")])
     rows.append([InlineKeyboardButton(text="◀ Back", callback_data=f"asst_sym:{symbol}")])

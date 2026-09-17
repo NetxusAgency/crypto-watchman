@@ -1,8 +1,14 @@
 from dataclasses import dataclass
+import json
+import logging
+import re
 from typing import Sequence
 from sqlalchemy import select, delete, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.models import TradingStrategy
+from app.services.market_digest.digest_service import call_llm
+
+logger = logging.getLogger("crypto_watchman.strategies")
 
 
 @dataclass
@@ -218,3 +224,175 @@ async def delete_user_strategy(
     result = await session.execute(stmt)
     await session.commit()
     return result.rowcount > 0
+
+
+SYSTEM_DOC_EXTRACT_PROMPT = (
+    "You are a meticulous trading-strategy analyst. You read trading strategy documents and "
+    "carefully extract EVERY distinct strategy described in them. "
+    "A single document may describe several independent strategies; split them apart precisely. "
+    "For each strategy you must preserve its full logic: the exact market conditions needed to enter, "
+    "confirmation signals, indicators, entry trigger, stop-loss placement, and profit targets. "
+    "Respond ONLY with valid JSON, no commentary, matching the schema exactly: "
+    '{"strategies": [{"name": "...", "description": "...", "timeframes": "...", '
+    '"indicators": "...", "rules": "complete, detailed rules with entry & exit logic"}]}'
+)
+
+
+def _extract_json_array(text: str | None) -> list[dict] | None:
+    if not text:
+        return None
+    cleaned = re.sub(r"```(?:json)?", "", text).strip()
+    start, end = cleaned.find("["), cleaned.rfind("]")
+    if start == -1 or end == -1:
+        start, end = cleaned.find("{"), cleaned.rfind("}")
+        if start == -1 or end == -1:
+            return None
+        try:
+            obj = json.loads(cleaned[start : end + 1])
+            arr = obj.get("strategies") or []
+        except Exception:
+            return None
+    else:
+        try:
+            arr = json.loads(cleaned[start : end + 1])
+        except Exception:
+            return None
+    if isinstance(arr, list):
+        return [s for s in arr if isinstance(s, dict)]
+    return None
+
+
+def _visible_text(text: str) -> str:
+    """Squash whitespace for the strategy-name heuristic."""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+async def _categorize_document_with_llm(
+    doc_text: str, filename: str
+) -> list[dict]:
+    truncated = doc_text[:8000]
+    prompt = (
+        f"A user uploaded a trading strategy document named '{filename}'. "
+        "It may contain one or more separate trading strategies.\n\n"
+        "=== DOCUMENT CONTENT ===\n"
+        f"{truncated}\n"
+        "=== END DOCUMENT ===\n\n"
+        "Carefully identify every distinct strategy in the document. "
+        "Each 'name' must be short and descriptive. Each 'rules' field must contain the "
+        "COMPLETE logic: exact market conditions that allow entry, confirmation signals, "
+        "entry trigger, stop loss, and targets. Do not invent rules that are not present."
+    )
+    raw = await call_llm(
+        prompt,
+        max_tokens=1500,
+        system_prompt=SYSTEM_DOC_EXTRACT_PROMPT,
+    )
+    items = _extract_json_array(raw)
+    if not items:
+        raise ValueError("Could not parse the AI categorization of your document.")
+
+    valid = []
+    for item in items:
+        name = str(item.get("name") or "").strip()[:100]
+        rules = str(item.get("rules") or "").strip()
+        if not name or len(rules) < 20:
+            continue
+        valid.append(
+            {
+                "name": name,
+                "description": str(item.get("description") or "").strip()[:500],
+                "timeframes": str(item.get("timeframes") or "15m,1h,4h,1d")[:50],
+                "indicators": str(item.get("indicators") or "EMA,RSI,MACD,ATR")[:100],
+                "rules": rules[:2000],
+            }
+        )
+    if not valid:
+        raise ValueError("The AI found no usable strategies in your document.")
+    return valid
+
+
+def _fallback_document_split(doc_text: str) -> list[dict]:
+    """Heuristic split when the LLM is unavailable: strategy headings become names."""
+    lines = doc_text.splitlines()
+    strategies: list[dict] = []
+    current_name: str | None = None
+    current_parts: list[str] = []
+    heading_re = re.compile(r"^\s*(?:strategy|#+)\s*[\d.)]*\s*[:,-]?\s*(.+)$", re.IGNORECASE)
+
+    def flush():
+        nonlocal current_name, current_parts
+        if current_name and current_parts:
+            rules = "\n".join(current_parts).strip()
+            strategies.append(
+                {
+                    "name": current_name[:100],
+                    "description": f"Heuristically extracted from uploaded document.",
+                    "timeframes": "15m,1h,4h,1d",
+                    "indicators": "EMA,RSI,MACD,ATR",
+                    "rules": rules[:2000],
+                }
+            )
+        current_name = None
+        current_parts = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        m = heading_re.match(stripped)
+        if m and len(stripped) < 120:
+            flush()
+            current_name = m.group(1).strip().strip("#").strip(":")
+        else:
+            current_parts.append(stripped)
+    flush()
+
+    if strategies:
+        return [s for s in strategies if len(s["rules"]) >= 20]
+
+    # No headings found: import the full text as a single strategy.
+    return [
+        {
+            "name": "Imported Strategy",
+            "description": "Strategy imported from an uploaded document.",
+            "timeframes": "15m,1h,4h,1d",
+            "indicators": "EMA,RSI,MACD,ATR",
+            "rules": _visible_text(doc_text)[:2000],
+        }
+    ]
+
+
+async def import_strategies_from_document(
+    session: AsyncSession,
+    user_id: int,
+    doc_text: str,
+    filename: str,
+    source_note: str | None = None,
+) -> list[TradingStrategy]:
+    """Categorize a strategy document into one or more strategies and persist them."""
+    if not doc_text.strip():
+        raise ValueError("The document contains no readable text.")
+
+    try:
+        items = await _categorize_document_with_llm(doc_text, filename)
+    except ValueError:
+        raise
+    except Exception as e:
+        logger.warning(f"LLM doc categorization failed, using heuristic split: {e}")
+        items = _fallback_document_split(doc_text)
+
+    created: list[TradingStrategy] = []
+    source = source_note or f"Imported from {filename}"
+    for item in items:
+        description = f"{source}. {item['description']}".strip().strip(".")
+        strategy = await add_user_strategy(
+            session=session,
+            user_id=user_id,
+            name=item["name"],
+            rules=item["rules"],
+            description=description,
+            timeframes=item["timeframes"],
+            indicators=item["indicators"],
+        )
+        created.append(strategy)
+    return created

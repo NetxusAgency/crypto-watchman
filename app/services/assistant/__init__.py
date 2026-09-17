@@ -10,6 +10,7 @@ from app.services.assistant.strategies import (
     get_strategy_definition,
     get_strategy_definition_any,
     get_user_strategies,
+    import_strategies_from_document,
     seed_preset_strategies,
 )
 
@@ -23,5 +24,6 @@ __all__ = [
     "get_user_strategies",
     "add_user_strategy",
     "delete_user_strategy",
+    "import_strategies_from_document",
     "seed_preset_strategies",
 ]

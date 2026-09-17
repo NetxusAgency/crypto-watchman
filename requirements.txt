@@ -13,3 +13,5 @@ psycopg2-binary>=2.9.9
 aiosqlite>=0.20.0
 gunicorn>=21.2.0
 pytest>=8.1.0
+pypdf>=4.0.0
+python-docx>=1.1.0

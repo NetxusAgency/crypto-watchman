@@ -1,6 +1,7 @@
+import io
 import logging
 
-from aiogram import F, Router, html
+from aiogram import Bot, F, Router, html
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -23,6 +24,12 @@ from app.services.assistant import (
     get_or_create_trade_setup,
     get_strategy_definition_any,
     get_user_strategies,
+    import_strategies_from_document,
+)
+from app.services.assistant.document_parser import (
+    MAX_DOCUMENT_BYTES,
+    extract_document_extension,
+    extract_text_from_document,
 )
 
 logger = logging.getLogger("crypto_watchman.assistant_handlers")
@@ -215,6 +222,137 @@ async def cb_new_strategy(callback: CallbackQuery, state: FSMContext):
         parse_mode="HTML",
     )
     await callback.answer()
+
+
+@router.callback_query(F.data == "asst_import_doc")
+async def cb_import_document(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(AssistantStates.waiting_for_strategy_document)
+    await callback.message.edit_text(
+        "📄 <b>Import Strategy Document</b>\n\n"
+        "Upload a <b>PDF</b>, <b>DOCX</b> or <b>TXT</b> file. "
+        "The AI will read it and split out every strategy it contains.\n\n"
+        "📦 Format: PDF / DOCX / TXT — up to <b>10 MB</b>\n"
+        "💡 A single document can hold several strategies — each will be detected separately.\n\n"
+        "<i>Note: after importing, tap the ⭐ strategy to analyze an asset with it.</i>",
+        reply_markup=cancel_button(),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.message(AssistantStates.waiting_for_strategy_document)
+async def process_strategy_document(message: Message, bot: Bot, session: AsyncSession, state: FSMContext):
+    if not message.document:
+        await message.answer(
+            "📎 Please send the strategy as an attached <b>PDF, DOCX or TXT</b> file.",
+            reply_markup=cancel_button(),
+            parse_mode="HTML",
+        )
+        return
+
+    document = message.document
+    original_name = document.file_name or "strategy"
+    ext = extract_document_extension(original_name)
+
+    if document.file_size and document.file_size > MAX_DOCUMENT_BYTES:
+        await message.answer(
+            "⚠️ The file exceeds the <b>10 MB</b> limit. Please send a smaller version.",
+            reply_markup=cancel_button(),
+            parse_mode="HTML",
+        )
+        return
+    if ext not in (".pdf", ".docx", ".txt", ".md"):
+        await message.answer(
+            f"⚠️ Unsupported format <b>{html.quote(ext)}</b>. Use <b>PDF</b>, <b>DOCX</b> or <b>TXT</b>.",
+            reply_markup=cancel_button(),
+            parse_mode="HTML",
+        )
+        return
+
+    await message.answer(f"⏳ <i>Reading <b>{html.quote(document.file_name)}</b>…</i>", parse_mode="HTML")
+
+    try:
+        file = await bot.get_file(document.file_id)
+        buf = io.BytesIO()
+        if not file.file_path:
+            raise ValueError("Could not locate the document file.")
+        await bot.download_file(file.file_path, destination=buf)
+        buf.seek(0)
+
+        doc_text = extract_text_from_document(buf.read(), document.file_name or "strategy")
+    except Exception as e:
+        logger.error(f"Failed to read uploaded document: {e}", exc_info=True)
+        await message.answer(
+            "❌ Could not read the file. Make sure it is a valid text-based PDF, DOCX or TXT.",
+            reply_markup=cancel_button(),
+        )
+        return
+
+    if not doc_text.strip():
+        await message.answer(
+            "⚠️ The document contains no readable text (it may be a scanned/image-only PDF). "
+            "Please upload a text-based file.",
+            reply_markup=cancel_button(),
+        )
+        return
+
+    user = await db_service.get_or_create_user(
+        session=session,
+        telegram_id=message.from_user.id,
+        username=message.from_user.username,
+    )
+
+    status_msg = await message.answer(
+        f"🔎 <i>Analyzing <b>{html.quote(document.file_name or 'document')}</b> — "
+        f"separating strategies…</i>",
+        parse_mode="HTML",
+    )
+
+    try:
+        created = await import_strategies_from_document(
+            session=session,
+            user_id=user.id,
+            doc_text=doc_text,
+            filename=document.file_name or "strategy",
+        )
+    except ValueError as e:
+        logger.warning(f"Strategy import failed: {e}")
+        await message.answer(f"❌ {str(e)}", reply_markup=cancel_button())
+        return
+    except Exception as e:
+        logger.error(f"Strategy import failed unexpectedly: {e}", exc_info=True)
+        await message.answer(
+            "❌ Something went wrong while importing the strategies. Please try again.",
+            reply_markup=cancel_button(),
+        )
+        return
+
+    data = await state.get_data()
+    symbol = data.get("asst_symbol")
+    timeframe = data.get("asst_timeframe")
+    await state.clear()
+
+    await bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
+
+    names = "\n".join(f"• ⭐ <b>{html.quote(s.name)}</b>" for s in created)
+    await message.answer(
+        f"✅ Successfully imported <b>{len(created)}</b> strateg{'y' if len(created) == 1 else 'ies'} "
+        f"from <b>{html.quote(document.file_name or 'document')}</b>:\n\n{names}",
+        parse_mode="HTML",
+    )
+
+    if symbol and timeframe:
+        user_strategies = await get_user_strategies(session, user.id)
+        await message.answer(
+            f"🧭 <b>Select Strategy for {html.quote(symbol)} ({html.quote(timeframe.upper())})</b>",
+            reply_markup=assistant_strategy_keyboard(symbol, timeframe, user_strategies),
+            parse_mode="HTML",
+        )
+    else:
+        await message.answer(
+            "Run /assistant to analyze an asset with your imported strategies.",
+            reply_markup=cancel_button(),
+        )
 
 
 @router.message(AssistantStates.waiting_for_strategy_name)

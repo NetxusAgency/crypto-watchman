@@ -2,8 +2,17 @@ import asyncio
 import math
 from types import SimpleNamespace
 
-from app.services.assistant.analyzer import _extract_json, generate_fallback_setup
+from app.services.assistant.analyzer import (
+    _extract_json,
+    evaluate_entry,
+    evaluate_entry_from_data,
+    generate_fallback_setup,
+)
 from app.services.assistant.assistant_service import format_trade_setup_message
+from app.services.assistant.document_parser import (
+    extract_document_extension,
+    extract_text_from_document,
+)
 from app.services.assistant.indicators import (
     Candle,
     TechnicalSnapshot,
@@ -19,6 +28,8 @@ from app.services.assistant.indicators import (
 from app.services.assistant.strategies import (
     PRESET_STRATEGIES,
     STRATEGIES_MAP,
+    _extract_json_array,
+    _fallback_document_split,
     get_strategy_definition,
     get_strategy_definition_any,
     is_custom_key,
@@ -301,3 +312,166 @@ class TestFormatting:
         assert "&gt;" in formatted
         assert "EMA 20 (76173) < EMA 50" not in formatted
         assert "invalidates <b>short</b>" not in formatted
+
+    def test_format_no_entry_card(self):
+        snapshot = TechnicalSnapshot(
+            symbol="BTC",
+            timeframe="1h",
+            current_price=64000.0,
+            ema_20=63800.0,
+            ema_50=63500.0,
+            sma_200=60000.0,
+            rsi_14=25.0,
+            macd_line=25.0,
+            macd_signal=15.0,
+            macd_hist=10.0,
+            atr_14=600.0,
+            bb_upper=65000.0,
+            bb_middle=63800.0,
+            bb_lower=62600.0,
+            support_levels=[63200.0],
+            resistance_levels=[65500.0],
+            trend_bias="BULLISH",
+        )
+        setup = generate_fallback_setup(snapshot, get_strategy_definition("trend_pullback"))
+        setup.can_enter = False
+        setup.entry_reason = "RSI is too overextended to chase here."
+
+        formatted = format_trade_setup_message(setup)
+
+        assert "Market conditions do NOT favour entry" in formatted
+        assert "Entry Zone:" not in formatted
+        assert "Stop Loss:" not in formatted
+        assert "Why no entry:" in formatted
+
+    def test_format_conditions_favour_entry(self):
+        snapshot = TechnicalSnapshot(
+            symbol="BTC",
+            timeframe="1h",
+            current_price=64000.0,
+            ema_20=63800.0,
+            ema_50=63500.0,
+            sma_200=60000.0,
+            rsi_14=55.0,
+            macd_line=25.0,
+            macd_signal=15.0,
+            macd_hist=10.0,
+            atr_14=600.0,
+            bb_upper=65000.0,
+            bb_middle=63800.0,
+            bb_lower=62600.0,
+            support_levels=[63200.0],
+            resistance_levels=[65500.0],
+            trend_bias="BULLISH",
+        )
+        setup = generate_fallback_setup(snapshot, get_strategy_definition("trend_pullback"))
+
+        formatted = format_trade_setup_message(setup)
+
+        assert setup.can_enter is True
+        assert "Conditions favour entry" in formatted
+        assert "Entry Zone:" in formatted
+
+
+class TestEntryVerdict:
+    def _snapshot(self, rsi=None, trend="BULLISH", bb_upper=100.0, bb_lower=96.0, macd=1.0):
+        return TechnicalSnapshot(
+            symbol="BTC",
+            timeframe="1h",
+            current_price=98.0,
+            ema_20=97.0,
+            ema_50=95.0,
+            sma_200=90.0,
+            rsi_14=rsi,
+            macd_line=2.0,
+            macd_signal=1.0,
+            macd_hist=macd,
+            atr_14=2.0,
+            bb_upper=bb_upper,
+            bb_middle=98.0,
+            bb_lower=bb_lower,
+            support_levels=[95.0],
+            resistance_levels=[102.0],
+            trend_bias=trend,
+        )
+
+    def test_mean_reversion_oversold_favours(self):
+        can_enter, reason = evaluate_entry("mean_reversion", self._snapshot(rsi=25.0))
+        assert can_enter is True
+        assert "oversold" in reason.lower()
+
+    def test_mean_reversion_neutral_rsi_blocks(self):
+        can_enter, reason = evaluate_entry("mean_reversion", self._snapshot(rsi=52.0, trend="NEUTRAL"))
+        assert can_enter is False
+        assert "not in the extreme zone" in reason.lower()
+
+    def test_breakout_squeeze_favours(self):
+        can_enter, reason = evaluate_entry("breakout", self._snapshot(trend="NEUTRAL", bb_upper=100.0, bb_lower=97.0))
+        assert can_enter is True
+
+    def test_breakout_no_signal_blocks(self):
+        can_enter, reason = evaluate_entry("breakout", self._snapshot(trend="NEUTRAL", bb_upper=130.0, bb_lower=66.0, macd=0.0))
+        assert can_enter is False
+
+    def test_general_neutral_blocks(self):
+        can_enter, _ = evaluate_entry("general", self._snapshot(rsi=50.0, trend="NEUTRAL"))
+        assert can_enter is False
+
+    def test_custom_trend_overextended_blocks(self):
+        can_enter, _ = evaluate_entry("custom_1", self._snapshot(rsi=25.0))
+        assert can_enter is False
+
+    def test_custom_trend_favours(self):
+        can_enter, reason = evaluate_entry("custom_1", self._snapshot(rsi=55.0))
+        assert can_enter is True
+        assert "entry" in reason.lower()
+
+    def test_evaluate_from_dict_matches(self):
+        snapshot = self._snapshot(rsi=55.0)
+        data = snapshot.to_dict()
+        can_enter, reason = evaluate_entry_from_data("custom_1", data)
+        assert can_enter is True
+        assert "entry" in reason.lower()
+
+
+class TestDocumentImport:
+    def test_extract_document_extension(self):
+        assert extract_document_extension("trading.pdf") == ".pdf"
+        assert extract_document_extension("strategy.DOCX") == ".docx"
+        assert extract_document_extension("notes") == ""
+
+    def test_extract_text_txt(self):
+        text = extract_text_from_document(b"Strategy One rules here\nEntry when RSI < 30.", "notes.txt")
+        assert "Strategy One" in text
+        assert "RSI" in text
+
+    def test_fallback_split_multiple_strategies(self):
+        doc = (
+            "Strategy: Momentum Breakout\n"
+            "Enter when price breaks the 20-period high with volume. Stop below the low of the breakout bar.\n"
+            "\n"
+            "Strategy: Mean Reversion\n"
+            "Buy when RSI dips below 30 near support. Target the middle band. Stop below the swing low.\n"
+        )
+        items = _fallback_document_split(doc)
+        assert len(items) == 2
+        assert items[0]["name"] == "Momentum Breakout"
+        assert items[1]["name"] == "Mean Reversion"
+        assert len(items[0]["rules"]) > 20
+
+    def test_fallback_single_strategy_when_no_headings(self):
+        items = _fallback_document_split("Buy BTC when RSI is under 30 on the 4h chart and price is above the EMA20.")
+        assert len(items) == 1
+        assert items[0]["name"] == "Imported Strategy"
+        assert "RSI" in items[0]["rules"]
+
+    def test_extract_json_array(self):
+        raw = '```json\n{"strategies": [{"name": "A", "rules": "x"}, {"name": "B", "rules": "y"}]}\n```'
+        arr = _extract_json_array(raw)
+        assert arr is not None
+        assert len(arr) == 2
+        assert arr[0]["name"] == "A"
+
+    def test_extract_json_array_invalid(self):
+        assert _extract_json_array("not json") is None
+        assert _extract_json_array(None) is None

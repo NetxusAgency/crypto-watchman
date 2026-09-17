@@ -7,7 +7,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models import TradeAnalysis
-from app.services.assistant.analyzer import TradeSetup, analyze_market_setup
+from app.services.assistant.analyzer import (
+    TradeSetup,
+    analyze_market_setup,
+    evaluate_entry_from_data,
+)
 from app.services.assistant.indicators import compute_all_indicators
 from app.services.assistant.klines import kline_fetcher
 from app.services.assistant.strategies import get_strategy_definition_any
@@ -66,6 +70,7 @@ async def get_or_create_trade_setup(
                 ind_data = json.loads(cached.indicators_snapshot) if cached.indicators_snapshot else {}
                 reasons = json.loads(cached.reasoning) if cached.reasoning.startswith("[") else [cached.reasoning]
                 strat_def = await get_strategy_definition_any(session, cached.strategy_key, user_id)
+                can_enter, entry_reason = evaluate_entry_from_data(cached.strategy_key, ind_data)
                 return TradeSetup(
                     symbol=cached.symbol,
                     timeframe=cached.timeframe,
@@ -83,6 +88,8 @@ async def get_or_create_trade_setup(
                     indicators_summary=ind_data,
                     reasoning=reasons,
                     invalidation=cached.invalidation,
+                    can_enter=can_enter,
+                    entry_reason=entry_reason,
                 )
             except Exception as e:
                 logger.warning(f"Error reading cached TradeAnalysis: {e}")
@@ -144,13 +151,44 @@ def format_trade_setup_message(setup: TradeSetup) -> str:
     ema_str = f"${ema20:,.2f} / ${ema50:,.2f}" if (ema20 and ema50) else "N/A"
     atr = ind.get("atr_14")
     atr_str = f"${atr:,.2f}" if atr is not None else "N/A"
+    supports = ind.get("support_levels") or []
+    resistances = ind.get("resistance_levels") or []
+    sup_str = " / ".join(f"${x:,.4f}" for x in supports[:3]) or "N/A"
+    res_str = " / ".join(f"${x:,.4f}" for x in resistances[:3]) or "N/A"
 
     reason_lines = "\n".join([f"• {html.escape(str(r))}" for r in setup.reasoning])
 
-    return (
+    header = (
         f"🎯 <b>AI Trading Assistant — {html.escape(setup.symbol)} ({html.escape(setup.timeframe.upper())})</b>\n\n"
         f"<b>Strategy:</b> {html.escape(setup.strategy_name)}\n"
         f"<b>Market Bias:</b> {bias_label}\n\n"
+    )
+
+    if not setup.can_enter:
+        no_entry_reason = html.escape(str(setup.entry_reason or "No entry signal is currently active."))
+        return (
+            header
+            + f"🚫 <b>Market conditions do NOT favour entry right now.</b>\n\n"
+            f"💬 <i>{no_entry_reason}</i>\n\n"
+            f"💰 <b>Current Price:</b> <code>${p:,.4f}</code>\n"
+            f"📊 <b>Technical Snapshot:</b>\n"
+            f"• <b>RSI (14):</b> {rsi_str}\n"
+            f"• <b>EMA (20/50):</b> {ema_str}\n"
+            f"• <b>ATR (14):</b> {atr_str}\n"
+            f"• <b>Support:</b> {sup_str}\n"
+            f"• <b>Resistance:</b> {res_str}\n\n"
+            f"💡 <b>Why no entry:</b>\n"
+            f"{reason_lines}\n\n"
+            f"<i>This strategy waits for its confirmed entry signal. The assistant will keep evaluating "
+            f"as market conditions evolve.</i>\n\n"
+            f"<i>⚠️ Strictly for analysis and educational reference. Never risk more than you can afford to lose.</i>"
+        )
+
+    entry_line = html.escape(str(setup.entry_reason or "The strategy's entry triggers line up with current market conditions."))
+    return (
+        header
+        + f"✅ <b>Conditions favour entry.</b>\n"
+        f"💬 <i>{entry_line}</i>\n\n"
         f"💰 <b>Current Price:</b> <code>${p:,.4f}</code>\n"
         f"📍 <b>Entry Zone:</b> <code>${setup.entry_min:,.4f} – ${setup.entry_max:,.4f}</code>\n"
         f"🛑 <b>Stop Loss:</b> <code>${setup.stop_loss:,.4f}</code> ({sl_pct:+.2f}%)\n"

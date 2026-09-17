@@ -155,6 +155,15 @@ Built a quantitative and AI-driven trade analysis assistant that computes multi-
 - `assistant_strategy_keyboard` in `keyboards.py` extended: shows custom strategies as ⭐ entries between the four presets and the ➕ button; `assistant_manage_keyboard` added for the management screen.
 - Added 5 new unit tests (is_custom_key, from_row, get_definition_any fallback); full suite: **59 passed in 17.8s**.
 
+### 2026-09-17 — Strategy document import + entry-verdict replies
+- Users can now upload their strategy as a **PDF / DOCX / TXT** file via the **📄 Import Strategy Document** button on the strategy selection screen (up to 10 MB).
+- A single document may contain several strategies: the AI carefully splits out each one, preserving full entry/exit logic, then imports each as its own selectable ⭐ strategy.
+- New parsing module `app/services/assistant/document_parser.py` (`pypdf`, `python-docx`); new `import_strategies_from_document` in `strategies.py` runs an LLM categorization pass with a heading-based heuristic fallback when the LLM is unreachable.
+- Trade cards now carry an **entry verdict**: when current indicators satisfy the strategy's entry signals the card says ✅ "Conditions favour entry — <reason>"; when they do not, the card says 🚫 "Market conditions do NOT favour entry right now" with a "Why no entry" rationale and no trade levels.
+- `TradeSetup` gained `can_enter` / `entry_reason`; deterministic evaluators `evaluate_entry` (live) and `evaluate_entry_from_data` (cache reads) in `analyzer.py`; the LLM JSON schema now requests `can_enter` + `entry_reason`.
+- Deps added: `pypdf`, `python-docx`.
+- 16 new unit tests (document parsing, doc splitting, JSON array extract, entry verdicts, no-entry card); full suite: **75 passed in 11.5s**.
+
 ---
 
 ## Next up: Phase 2D — Web3 Portfolio

@@ -38,9 +38,101 @@ class TradeSetup:
     indicators_summary: dict
     reasoning: list[str]
     invalidation: str
+    can_enter: bool = True
+    entry_reason: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def _evaluate_entry_core(
+    strategy_key: str,
+    rsi: float | None,
+    trend_bias: str | None,
+    price: float | None,
+    bb_upper: float | None,
+    bb_lower: float | None,
+    macd_hist: float | None,
+) -> tuple[bool, str]:
+    """Deterministic entry-favour check based on strategy type and technical snapshot."""
+    trend = (trend_bias or "NEUTRAL").upper()
+    key = strategy_key or "general"
+
+    if key == "mean_reversion":
+        if rsi is not None and rsi < 30:
+            return True, f"RSI ({rsi:.1f}) is oversold (<30), exactly where mean-reversion entries are triggered."
+        if rsi is not None and rsi > 70:
+            return True, f"RSI ({rsi:.1f}) is overbought (>70), exactly where counter-trend shorts are triggered."
+        return False, (
+            f"RSI ({rsi:.1f}) is not in the extreme zone (<30 or >70) this strategy requires "
+            "for a reversal entry. Conditions do not yet favour entry."
+        )
+
+    if key == "breakout":
+        bb_width = None
+        if price and bb_upper is not None and bb_lower is not None:
+            bb_width = (bb_upper - bb_lower) / price
+        if bb_width is not None and 0.02 <= bb_width <= 0.13:
+            return True, (
+                f"Price is coiling in a tight range (Bollinger width ~{bb_width * 100:.1f}%), "
+                "so a breakout release is primed for this strategy."
+            )
+        if trend in ("BULLISH", "BEARISH") and macd_hist:
+            return True, (
+                f"Momentum is already committed (trend {trend}, MACD histogram {macd_hist:+.3f}), "
+                "so a follow-through break satisfies the entry trigger."
+            )
+        return False, (
+            "Price is drifting without a clear consolidation zone or committed momentum impulse. "
+            "The breakout trigger is not yet active."
+        )
+
+    if key == "general":
+        if trend in ("BULLISH", "BEARISH"):
+            return True, (
+                f"The dominant market structure is {trend}, giving a directional bias for the setup."
+            )
+        return False, "The market is range-bound without a dominant directional bias — entry is not favoured."
+
+    # trend_pullback and any custom strategy: require trend + sensible RSI
+    overextended = rsi is not None and (rsi <= 28 or rsi >= 78)
+    if trend in ("BULLISH", "BEARISH") and not overextended:
+        return True, (
+            f"Trend is {trend} and RSI ({rsi:.1f}) is in a healthy zone, "
+            "so the strategy's entry conditions are satisfied."
+        )
+    return False, (
+        f"Market conditions fail the entry test for this strategy "
+        f"(trend: {trend}, RSI: {rsi or 'n/a'}) — no confirmed signal to enter."
+    )
+
+
+def evaluate_entry(
+    strategy_key: str, snapshot: TechnicalSnapshot
+) -> tuple[bool, str]:
+    """Decide whether current conditions favour entry for the given strategy."""
+    return _evaluate_entry_core(
+        strategy_key=strategy_key,
+        rsi=snapshot.rsi_14,
+        trend_bias=snapshot.trend_bias,
+        price=snapshot.current_price,
+        bb_upper=snapshot.bb_upper,
+        bb_lower=snapshot.bb_lower,
+        macd_hist=snapshot.macd_hist,
+    )
+
+
+def evaluate_entry_from_data(strategy_key: str, data: dict) -> tuple[bool, str]:
+    """Re-derive the entry verdict from a stored indicators snapshot (cache reads)."""
+    return _evaluate_entry_core(
+        strategy_key=strategy_key,
+        rsi=data.get("rsi_14"),
+        trend_bias=data.get("trend_bias"),
+        price=data.get("current_price"),
+        bb_upper=data.get("bb_upper"),
+        bb_lower=data.get("bb_lower"),
+        macd_hist=data.get("macd_hist"),
+    )
 
 
 def _extract_json(text: str | None) -> dict | None:
@@ -111,6 +203,8 @@ def generate_fallback_setup(
         ]
         invalidation = f"Breakout and hold outside ${supports[0]:,.4f} - ${resistances[0]:,.4f} range."
 
+    can_enter, entry_reason = evaluate_entry(strategy.key, snapshot)
+
     return TradeSetup(
         symbol=snapshot.symbol,
         timeframe=snapshot.timeframe,
@@ -128,6 +222,8 @@ def generate_fallback_setup(
         indicators_summary=snapshot.to_dict(),
         reasoning=reasoning,
         invalidation=invalidation,
+        can_enter=can_enter,
+        entry_reason=entry_reason,
     )
 
 
@@ -157,9 +253,14 @@ Technical Indicators Snapshot:
 - Recent Closes: {recent_closes}
 
 Produce a structured, professional trade setup.
+First decide whether the CURRENT market conditions favour an entry for THIS strategy:
+- If the strategy's entry signals are satisfied, set "can_enter": true and explain briefly WHY we can enter.
+- If the signals are NOT satisfied, set "can_enter": false and explain briefly WHY we should NOT enter.
 Respond strictly in JSON format matching this schema:
 {{
   "bias": "BULLISH" or "BEARISH" or "NEUTRAL",
+  "can_enter": true or false,
+  "entry_reason": "one or two sentences explaining why conditions do or do not favour entry",
   "entry_min": float,
   "entry_max": float,
   "stop_loss": float,
@@ -174,7 +275,7 @@ Respond strictly in JSON format matching this schema:
     try:
         raw_response = await call_llm(
             prompt,
-            max_tokens=700,
+            max_tokens=800,
             system_prompt=SYSTEM_ASSISTANT_PROMPT,
         )
         parsed = _extract_json(raw_response)
@@ -183,6 +284,14 @@ Respond strictly in JSON format matching this schema:
             bias_val = str(parsed.get("bias", snapshot.trend_bias)).upper()
             if bias_val not in ("BULLISH", "BEARISH", "NEUTRAL"):
                 bias_val = snapshot.trend_bias
+
+            can_enter_default, reason_default = evaluate_entry(strategy.key, snapshot)
+            can_enter = parsed.get("can_enter", can_enter_default)
+            if isinstance(can_enter, str):
+                can_enter = can_enter.strip().lower() in ("true", "yes", "1")
+            if not isinstance(can_enter, bool):
+                can_enter = can_enter_default
+            entry_reason = str(parsed.get("entry_reason", reason_default) or reason_default)[:400]
 
             entry_min = float(parsed.get("entry_min", snapshot.current_price))
             entry_max = float(parsed.get("entry_max", snapshot.current_price))
@@ -211,6 +320,8 @@ Respond strictly in JSON format matching this schema:
                 indicators_summary=snapshot.to_dict(),
                 reasoning=reasons,
                 invalidation=inval,
+                can_enter=bool(can_enter),
+                entry_reason=entry_reason,
             )
     except Exception as e:
         logger.warning(f"LLM assistant evaluation failed, using fallback setup: {e}")
