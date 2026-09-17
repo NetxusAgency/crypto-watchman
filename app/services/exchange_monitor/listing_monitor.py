@@ -4,11 +4,23 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
-from app.database.models import User, Notification
+from app.database.models import User, Notification, ListingEvent
 from app.bot.dispatcher import bot
 import redis.asyncio as aioredis
 
 logger = logging.getLogger("crypto_watchman.listing_monitor")
+
+
+def _base_symbol(pair: str, exchange: str) -> str:
+    """Normalize an exchange pair to its base asset for the opportunity engine."""
+    if exchange.lower() == "coinbase":
+        return (pair.split("-")[0] if "-" in pair else pair).upper()
+    cleaned = pair.upper()
+    for suffix in ("USDT", "USDC", "USD", "BUSD", "FDUSD", "TUSD"):
+        if cleaned.endswith(suffix) and cleaned != suffix:
+            cleaned = cleaned[: -len(suffix)]
+            break
+    return cleaned or pair.upper()
 
 
 class ListingMonitor:
@@ -86,6 +98,10 @@ class ListingMonitor:
     async def alert_users(self, session: AsyncSession, exchange: str, symbol: str):
         """Send a telegram alert to all PRO and PREMIUM users for a new listing."""
         logger.info(f"🚨 New Listing Alert! {symbol} listed on {exchange}.")
+
+        session.add(
+            ListingEvent(exchange=exchange, symbol=_base_symbol(symbol, exchange), pair=symbol)
+        )
         
         # Select all Pro and Premium users
         stmt = select(User).where(User.plan.in_(["pro", "premium"]))

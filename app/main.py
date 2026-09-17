@@ -21,6 +21,7 @@ from app.services.whale_tracker.assets import seed_assets
 from app.services.assistant.strategies import seed_preset_strategies
 from app.services.assistant.klines import kline_fetcher
 from app.services.wallet import wallet_service
+from app.services.opportunity import engine as opportunity_engine
 
 # Additive DB columns added after a table already exists (create_all cannot add
 # columns to an existing table). Each entry is applied idempotently at startup.
@@ -119,6 +120,15 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Wallet background refresh failed: {e}")
 
+    async def run_opportunity_scan():
+        try:
+            async with async_session_maker() as session:
+                count = await opportunity_engine.refresh_opportunities(session)
+            if count:
+                logger.info(f"Scored opportunities for {count} portfolio symbols.")
+        except Exception as e:
+            logger.warning(f"Opportunity background scan failed: {e}")
+
     scheduler.add_job(run_alert_check, "interval", seconds=30)
     scheduler.add_job(run_listing_check, "interval", minutes=2)
     scheduler.add_job(run_daily_digest, "cron", hour=9, minute=0)
@@ -126,8 +136,9 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(run_news_cleanup, "cron", hour="*/6", minute=5)
     scheduler.add_job(run_whale_scan, "interval", minutes=settings.WHALE_SCAN_MINUTES)
     scheduler.add_job(run_wallet_refresh, "interval", minutes=settings.WALLET_REFRESH_MINUTES)
+    scheduler.add_job(run_opportunity_scan, "interval", minutes=settings.OPPORTUNITY_SCAN_MINUTES)
     scheduler.start()
-    logger.info("Started internal background scheduler (alerts 30s, listings 2m, digest daily at 09:00, news 10m, whales 5m).")
+    logger.info("Started internal background scheduler (alerts 30s, listings 2m, digest daily at 09:00, news 10m, whales 5m, wallet 30m, opportunities 15m).")
 
     # 3. Start Telegram Bot Polling (supervised, auto-restarts on crash)
     async def run_polling_worker():

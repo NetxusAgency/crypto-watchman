@@ -198,6 +198,36 @@ Built a quantitative and AI-driven trade analysis assistant that computes multi-
 - Summary shows per-wallet total USD + top-10 assets with values; Mini App visualization planned in Phase 2E.
 - 10 new unit tests (network aliases, address validation, Covalent payload parsing, summary formatting); full suite: **88 passed in 10.5s**.
 
+## 2F — Opportunity Engine ✅
+
+### Scope
+- Deterministic weighted catalyst scoring per portfolio asset (signed −100…+100), aligned to alert priorities (LOW/MEDIUM/HIGH/CRITICAL), with an optional AI interpretation. Mini App (Phase 2E) still deferred.
+
+### New files
+- `app/database/models/opportunity.py` — `OpportunitySignal` (per-component catalyst evidence) + `OpportunityScore` (latest signed total per symbol, unique, with priority).
+- `app/database/models/exchange.py` — `ListingEvent` (new listings recorded by the monitor for the listing signal).
+- `app/services/opportunity/signals.py` — `OpportunityComponent` dataclass + collectors: `news_signal` (NewsAnalysis impact/confidence), `market_signal` (volume 24h-surge + momentum from one 4h candle fetch), `social_signal` (Reddit/RSS mention count), `listing_signal` (24h `ListingEvent` rows), `whale_signal` (24h whale USD inflows vs outflows), `liquidity_signal` (registry tier; stablecoins excluded).
+- `app/services/opportunity/engine.py` — `compute_opportunity`, `persist_opportunity`, `refresh_opportunities` (background scan over all portfolio symbols), `get_latest_scores`, `priority_for`, `total_from_components`, `format_opportunities`, `ai_note_for` (call_llm summary).
+- `app/bot/handlers/opportunities.py` — `/opportunities` + menu entry (fast cached path) and 🔄 Recompute callback (live scan over the user's portfolio).
+
+### Modified files
+- `app/core/config.py` — `OPPORTUNITY_SCAN_MINUTES` (default 15, min 5).
+- `app/database/models/__init__.py` — register `ListingEvent`, `OpportunitySignal`, `OpportunityScore`.
+- `app/services/exchange_monitor/listing_monitor.py` — records a `ListingEvent` (normalized base symbol via `_base_symbol`) for every newly detected listing.
+- `app/bot/keyboards.py` — 💡 Opportunities main-menu button (layout now 3/3/3/3), `opportunity_keyboard`.
+- `app/bot/handlers/menu.py` — 💡 Opportunities menu handler + FSM cancel set.
+- `app/bot/dispatcher.py` — register opportunities router.
+- `app/main.py` — `run_opportunity_scan` job (every `OPPORTUNITY_SCAN_MINUTES`).
+
+### Scoring weights
+- news 20 · volume 20 · momentum 15 · social 15 · listing 15 · whale 10 · liquidity 5.
+
+### Behavior
+- Each component: `score = weight × strength(0..1) × direction(±1/0)`. Total clamped to [−100, 100]; priority tiers: CRITICAL ≥60, HIGH ≥40, MEDIUM ≥20, else LOW.
+- Command/menu reads **cached** scores (fast); 🔄 Recompute runs a live scan (klines + social + news read) over the user's assets.
+- Background job keeps scores warm for every portfolio symbol; listing events feed the listing signal automatically.
+- 13 new unit tests (priority tiers, weighted totals, clamping, component scoring, formatting, listing base-symbol normalization); full suite: **101 passed in 36s**.
+
 ---
 
-## Next up: Phase 2D — Web3 Portfolio
+## Next up: Phase 2E — Mini App (deferred) · Phase 3 — payments/tiering

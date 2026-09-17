@@ -6,6 +6,8 @@ from app.database.models.news import NewsArticle, NewsAnalysis
 from app.database.models.whale import Asset, WhaleTransaction, WhalePreference
 from app.database.models.assistant import TradingStrategy, StrategyVersion, TradeAnalysis
 from app.database.models.wallet import Wallet, WalletBalance
+from app.database.models.exchange import ListingEvent
+from app.database.models.opportunity import OpportunitySignal, OpportunityScore
 
 
 class User(Base):
@@ -79,5 +81,6 @@ __all__ = [
     "User", "Portfolio", "Alert", "Notification", "Subscription",
     "NewsArticle", "NewsAnalysis", "Asset", "WhaleTransaction", "WhalePreference",
     "TradingStrategy", "StrategyVersion", "TradeAnalysis",
-    "Wallet", "WalletBalance",
+    "Wallet", "WalletBalance", "ListingEvent",
+    "OpportunitySignal", "OpportunityScore",
 ]

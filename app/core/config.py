@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     WHALE_SCAN_MINUTES: int = Field(default=5, ge=1)
     WHALE_MAX_ITEMS_PER_ASSET: int = Field(default=50, ge=1, le=200)
 
+    # Opportunity engine (Phase 2F)
+    OPPORTUNITY_SCAN_MINUTES: int = Field(default=15, ge=5)
+
     # Security
     SECRET_KEY: str = Field(default="change-me-to-a-very-secure-key")
 

@@ -13,12 +13,13 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     builder.button(text="📢 Sentiment")
     builder.button(text="🐋 Whales")
     builder.button(text="👛 Wallet")
+    builder.button(text="💡 Opportunities")
     builder.button(text="🧠 Digest")
     builder.button(text="📰 News")
     builder.button(text="🎯 Assistant")
     builder.button(text="⚙️ Settings")
     builder.button(text="❓ Help")
-    builder.adjust(3, 3, 3, 2)
+    builder.adjust(3, 3, 3, 3)
     return builder.as_markup(resize_keyboard=True, input_field_placeholder="Choose an option...")
 
 
@@ -151,6 +152,15 @@ def wallet_remove_confirm_keyboard(wallet_id: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="✅ Yes, remove", callback_data=f"wallet_del:{wallet_id}")],
             [InlineKeyboardButton(text="❌ No", callback_data="wallet_back")],
+        ]
+    )
+
+
+def opportunity_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Recompute", callback_data="opp_refresh")],
+            [InlineKeyboardButton(text="◀ Back", callback_data="menu_main")],
         ]
     )
 
