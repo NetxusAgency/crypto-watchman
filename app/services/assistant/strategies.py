@@ -232,9 +232,9 @@ SYSTEM_DOC_EXTRACT_PROMPT = (
     "A single document may describe several independent strategies; split them apart precisely. "
     "For each strategy you must preserve its full logic: the exact market conditions needed to enter, "
     "confirmation signals, indicators, entry trigger, stop-loss placement, and profit targets. "
-    "Respond ONLY with valid JSON, no commentary, matching the schema exactly: "
-    '{"strategies": [{"name": "...", "description": "...", "timeframes": "...", '
-    '"indicators": "...", "rules": "complete, detailed rules with entry & exit logic"}]}'
+    "Respond ONLY with a raw JSON array of objects, no markdown fences and no commentary, "
+    'matching this schema: [{"name": "...", "description": "...", "timeframes": "...", '
+    '"indicators": "...", "rules": "complete, detailed rules with entry & exit logic"}]'
 )
 
 
@@ -242,29 +242,48 @@ def _extract_json_array(text: str | None) -> list[dict] | None:
     if not text:
         return None
     cleaned = re.sub(r"```(?:json)?", "", text).strip()
+
+    # Try a raw top-level array first.
     start, end = cleaned.find("["), cleaned.rfind("]")
-    if start == -1 or end == -1:
-        start, end = cleaned.find("{"), cleaned.rfind("}")
-        if start == -1 or end == -1:
-            return None
-        try:
-            obj = json.loads(cleaned[start : end + 1])
-            arr = obj.get("strategies") or []
-        except Exception:
-            return None
-    else:
+    if start != -1 and end != -1:
         try:
             arr = json.loads(cleaned[start : end + 1])
+            if isinstance(arr, list):
+                return [s for s in arr if isinstance(s, dict)]
+        except Exception:
+            pass  # fall through to object extraction
+
+    # Otherwise look for a wrapper object that holds the array.
+    start, end = cleaned.find("{"), cleaned.rfind("}")
+    if start != -1 and end != -1:
+        try:
+            obj = json.loads(cleaned[start : end + 1])
         except Exception:
             return None
-    if isinstance(arr, list):
-        return [s for s in arr if isinstance(s, dict)]
+        if isinstance(obj, list):
+            return [s for s in obj if isinstance(s, dict)]
+        if isinstance(obj, dict):
+            for key in ("strategies", "strategy_list", "trading_strategies", "strategies_list", "items"):
+                arr = obj.get(key)
+                if isinstance(arr, list):
+                    return [s for s in arr if isinstance(s, dict)]
     return None
 
 
 def _visible_text(text: str) -> str:
     """Squash whitespace for the strategy-name heuristic."""
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _clean_heading(line: str) -> str:
+    """Turn a detected heading line into a clean strategy name."""
+    name = re.sub(r"^#+\s*", "", line).strip()
+    name = re.sub(r"^\d+[.)]\s*", "", name).strip()
+    name = re.sub(r"^(?:trading\s+|ai\s+)?strategy\b\s*[:,-]?\s*", "", name, flags=re.I)
+    name = name.strip("#").strip().strip(":").strip()
+    if not name:
+        name = "Imported Strategy"
+    return name[:100]
 
 
 async def _categorize_document_with_llm(
@@ -280,19 +299,18 @@ async def _categorize_document_with_llm(
         "Carefully identify every distinct strategy in the document. "
         "Each 'name' must be short and descriptive. Each 'rules' field must contain the "
         "COMPLETE logic: exact market conditions that allow entry, confirmation signals, "
-        "entry trigger, stop loss, and targets. Do not invent rules that are not present."
+        "entry trigger, stop loss, and targets. Do not invent rules that are not present. "
+        "Respond with ONLY the raw JSON array."
     )
     raw = await call_llm(
         prompt,
-        max_tokens=1500,
+        max_tokens=2000,
         system_prompt=SYSTEM_DOC_EXTRACT_PROMPT,
     )
     items = _extract_json_array(raw)
-    if not items:
-        raise ValueError("Could not parse the AI categorization of your document.")
 
     valid = []
-    for item in items:
+    for item in items or []:
         name = str(item.get("name") or "").strip()[:100]
         rules = str(item.get("rules") or "").strip()
         if not name or len(rules) < 20:
@@ -306,51 +324,61 @@ async def _categorize_document_with_llm(
                 "rules": rules[:2000],
             }
         )
-    if not valid:
-        raise ValueError("The AI found no usable strategies in your document.")
     return valid
 
 
 def _fallback_document_split(doc_text: str) -> list[dict]:
-    """Heuristic split when the LLM is unavailable: strategy headings become names."""
+    """Heuristic split when the LLM is unavailable: headings become strategy names."""
     lines = doc_text.splitlines()
-    strategies: list[dict] = []
-    current_name: str | None = None
-    current_parts: list[str] = []
-    heading_re = re.compile(r"^\s*(?:strategy|#+)\s*[\d.)]*\s*[:,-]?\s*(.+)$", re.IGNORECASE)
 
-    def flush():
-        nonlocal current_name, current_parts
-        if current_name and current_parts:
-            rules = "\n".join(current_parts).strip()
-            strategies.append(
-                {
-                    "name": current_name[:100],
-                    "description": f"Heuristically extracted from uploaded document.",
-                    "timeframes": "15m,1h,4h,1d",
-                    "indicators": "EMA,RSI,MACD,ATR",
-                    "rules": rules[:2000],
-                }
-            )
-        current_name = None
-        current_parts = []
+    strategy_heading = re.compile(r"^\s*(?:#+\s*)?(?:\d+[.)]\s*)?(?:trading\s+|ai\s+)?strategy\b", re.IGNORECASE)
+    numbered_heading = re.compile(r"^\s*(?:#+\s*)?\d+[.)]\s+[^\n]{2,90}$")
+    md_heading = re.compile(r"^\s*#+\s+[^\n]+$")
 
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
+    # First pass: prefer explicit "strategy" headings; fall back to numbered/markdown headings.
+    heading_idx: list[int] = []
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if not s or len(s) > 120:
             continue
-        m = heading_re.match(stripped)
-        if m and len(stripped) < 120:
-            flush()
-            current_name = m.group(1).strip().strip("#").strip(":")
-        else:
-            current_parts.append(stripped)
-    flush()
+        if strategy_heading.match(s):
+            heading_idx.append(i)
+    if not heading_idx:
+        for i, line in enumerate(lines):
+            s = line.strip()
+            if not s or len(s) > 120:
+                continue
+            if numbered_heading.match(s) and not s.endswith("."):
+                heading_idx.append(i)
+            elif md_heading.match(s):
+                heading_idx.append(i)
+
+    strategies: list[dict] = []
+    if heading_idx:
+        bounds = heading_idx + [len(lines)]
+        for idx, start in enumerate(heading_idx):
+            name = _clean_heading(lines[start])
+            body = [
+                l.strip()
+                for l in lines[start + 1 : bounds[idx + 1]]
+                if l.strip()
+            ]
+            rules = "\n".join(body).strip()
+            if name and len(rules) >= 20:
+                strategies.append(
+                    {
+                        "name": name[:100],
+                        "description": "Heuristically extracted from the uploaded document.",
+                        "timeframes": "15m,1h,4h,1d",
+                        "indicators": "EMA,RSI,MACD,ATR",
+                        "rules": rules[:2000],
+                    }
+                )
 
     if strategies:
-        return [s for s in strategies if len(s["rules"]) >= 20]
+        return strategies
 
-    # No headings found: import the full text as a single strategy.
+    # No usable headings found: import the full text as a single strategy.
     return [
         {
             "name": "Imported Strategy",
@@ -369,17 +397,21 @@ async def import_strategies_from_document(
     filename: str,
     source_note: str | None = None,
 ) -> list[TradingStrategy]:
-    """Categorize a strategy document into one or more strategies and persist them."""
+    """Categorize a strategy document into one or more strategies and persist them.
+
+    The LLM categorization is best-effort: a deterministic heading-based splitter
+    always runs first so the import can never fail on an unreadable AI response.
+    """
     if not doc_text.strip():
         raise ValueError("The document contains no readable text.")
 
+    items = _fallback_document_split(doc_text)
     try:
-        items = await _categorize_document_with_llm(doc_text, filename)
-    except ValueError:
-        raise
+        llm_items = await _categorize_document_with_llm(doc_text, filename)
+        if llm_items:
+            items = llm_items
     except Exception as e:
         logger.warning(f"LLM doc categorization failed, using heuristic split: {e}")
-        items = _fallback_document_split(doc_text)
 
     created: list[TradingStrategy] = []
     source = source_note or f"Imported from {filename}"

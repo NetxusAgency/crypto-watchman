@@ -472,6 +472,31 @@ class TestDocumentImport:
         assert len(arr) == 2
         assert arr[0]["name"] == "A"
 
+    def test_extract_json_array_wrapper_keys(self):
+        raw = '{"trading_strategies": [{"name": "A", "rules": "x"}]}'
+        arr = _extract_json_array(raw)
+        assert arr is not None
+        assert arr[0]["name"] == "A"
+
+    def test_extract_json_array_raw_top_level(self):
+        raw = '[{"name": "X", "rules": "z"}, {"name": "Y", "rules": "w"}]'
+        arr = _extract_json_array(raw)
+        assert arr is not None
+        assert len(arr) == 2
+
     def test_extract_json_array_invalid(self):
         assert _extract_json_array("not json") is None
         assert _extract_json_array(None) is None
+
+    def test_fallback_split_numbered_headings(self):
+        doc = (
+            "1. Momentum Breakout\n"
+            "Enter on a break of the 20-period high with heavy volume. Stop below the breakout bar low.\n"
+            "\n"
+            "2. Mean Reversion\n"
+            "Buy when RSI dips under 30 near support. Target the middle band. Stop below the swing low.\n"
+        )
+        items = _fallback_document_split(doc)
+        assert len(items) == 2
+        assert items[0]["name"] == "Momentum Breakout"
+        assert items[1]["name"] == "Mean Reversion"

@@ -164,6 +164,13 @@ Built a quantitative and AI-driven trade analysis assistant that computes multi-
 - Deps added: `pypdf`, `python-docx`.
 - 16 new unit tests (document parsing, doc splitting, JSON array extract, entry verdicts, no-entry card); full suite: **75 passed in 11.5s**.
 
+### 2026-09-17 — Resilient document import (fix)
+- Document import previously hard-failed with "Could not parse the AI categorization of your document" when the LLM returned no/broken JSON (e.g. provider unreachable or truncated reply).
+- `import_strategies_from_document` now runs the deterministic heading-based splitter first and treats the LLM categorization as a best-effort upgrade — the import can never fail on an AI response anymore.
+- `_extract_json_array` now accepts a raw top-level array, wrapper objects with several key names, and fenced/truncated output.
+- `_fallback_document_split` now also recognizes numbered headings (`1. Momentum Breakout`) and Markdown headings with cleaner name extraction.
+- 3 new unit tests; full suite: **78 passed in 13.5s**.
+
 ---
 
 ## Next up: Phase 2D — Web3 Portfolio
