@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     PUBLIC_BASE_URL: str = Field(default="http://localhost:8000")
     # Mini App auth token lifetime (hours)
     MINI_APP_TOKEN_TTL_HOURS: int = Field(default=24, ge=1)
+    # Secret dev bypass that authenticates as ADMIN_TELEGRAM_ID when opening the
+    # Mini App from a plain browser (?dev_token=...). Empty = disabled.
+    MINI_APP_DEV_TOKEN: str = ""
 
     # Security
     SECRET_KEY: str = Field(default="change-me-to-a-very-secure-key")

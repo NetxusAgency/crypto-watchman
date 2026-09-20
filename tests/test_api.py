@@ -71,6 +71,21 @@ class TestInitData:
         )
 
 
+class TestDevToken:
+    def test_valid_accepts(self, monkeypatch):
+        monkeypatch.setattr(settings, "MINI_APP_DEV_TOKEN", "supersecret")
+        assert security.is_valid_dev_token("supersecret") is True
+
+    def test_wrong_rejected(self, monkeypatch):
+        monkeypatch.setattr(settings, "MINI_APP_DEV_TOKEN", "supersecret")
+        assert security.is_valid_dev_token("wrong") is False
+
+    def test_disabled_when_unset(self, monkeypatch):
+        monkeypatch.setattr(settings, "MINI_APP_DEV_TOKEN", "")
+        assert security.is_valid_dev_token("anything") is False
+        assert security.is_valid_dev_token(None) is False
+
+
 class TestAppToken:
     def test_roundtrip(self):
         token = security.issue_token(VALID_USER_ID)

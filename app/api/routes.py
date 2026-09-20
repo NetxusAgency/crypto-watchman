@@ -42,24 +42,38 @@ async def require_telegram_id(
 
 
 class AuthPayload(BaseModel):
-    init_data: str
+    init_data: str = ""
+    dev_token: str = ""
 
 
 @router.post("/auth")
 async def auth(payload: AuthPayload):
-    """Exchange Telegram WebApp initData for a signed app token."""
-    data = security.validate_init_data(
-        payload.init_data, settings.TELEGRAM_BOT_TOKEN
-    )
-    if not data:
+    """Exchange Telegram WebApp initData (or a dev token) for a signed app token."""
+    telegram_id = None
+    username = None
+
+    if payload.init_data:
+        data = security.validate_init_data(
+            payload.init_data, settings.TELEGRAM_BOT_TOKEN
+        )
+        if data:
+            user_info = data["user"]
+            telegram_id = int(user_info["id"])
+            username = user_info.get("username")
+
+    if telegram_id is None:
+        if settings.ADMIN_TELEGRAM_ID and security.is_valid_dev_token(payload.dev_token):
+            telegram_id = settings.ADMIN_TELEGRAM_ID
+            username = "dev"
+
+    if telegram_id is None:
         raise HTTPException(status_code=401, detail="Invalid Telegram WebApp initData")
-    user_info = data["user"]
-    telegram_id = int(user_info["id"])
+
     async with async_session_maker() as session:
         user = await db_service.get_or_create_user(
             session=session,
             telegram_id=telegram_id,
-            username=user_info.get("username"),
+            username=username,
         )
     return {
         "token": security.issue_token(telegram_id),

@@ -68,6 +68,13 @@ def validate_init_data(init_data: str, bot_token: str) -> dict | None:
     return {"user": user, "auth_date": auth_date}
 
 
+def is_valid_dev_token(token: str | None) -> bool:
+    """Timing-safe check against MINI_APP_DEV_TOKEN (disabled when unset)."""
+    if not settings.MINI_APP_DEV_TOKEN or not token:
+        return False
+    return hmac.compare_digest(token, settings.MINI_APP_DEV_TOKEN)
+
+
 def issue_token(telegram_id: int, ttl_hours: int | None = None) -> str:
     """Sign `telegram_id:expiry` with SECRET_KEY and base64url-encode it."""
     ttl = ttl_hours or settings.MINI_APP_TOKEN_TTL_HOURS

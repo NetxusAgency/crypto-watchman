@@ -39,8 +39,22 @@
 
   function showError(msg) {
     const el = $("#errorBox");
-    el.textContent = msg;
-    el.classList.remove("hidden");
+    if (msg) {
+      el.textContent = msg;
+      el.classList.remove("hidden");
+    } else {
+      el.classList.add("hidden");
+    }
+  }
+
+  function renderEmptyState(msg) {
+    $$(".card-body").forEach((el) => {
+      if ((el.textContent || "").trim() === "Loading…") {
+        el.classList.add("empty");
+        el.textContent = "Sign in via Telegram to load data.";
+      }
+    });
+    showError(msg);
   }
 
   async function api(path, options) {
@@ -56,14 +70,26 @@
     return res.json();
   }
 
+  function devTokenFromUrl() {
+    return new URLSearchParams(window.location.search).get("dev_token");
+  }
+
   async function authenticate() {
     if (token) return;
-    if (!TELEGRAM || !TELEGRAM.initData) {
-      throw new Error("Open this page from a Telegram chat to use the Mini App.");
+    const body = {};
+    if (TELEGRAM && TELEGRAM.initData) {
+      body.init_data = TELEGRAM.initData;
+    } else if (devTokenFromUrl()) {
+      body.dev_token = devTokenFromUrl();
+    } else {
+      throw new Error(
+        "Open this page from a Telegram chat to use the Mini App" +
+        (window.location.pathname === "/app/" ? "" : "")
+      );
     }
     const data = await api("/api/auth", {
       method: "POST",
-      body: JSON.stringify({ init_data: TELEGRAM.initData }),
+      body: JSON.stringify(body),
     });
     token = data.token;
     const plan = document.querySelector("#planTag");
@@ -226,16 +252,15 @@
       .replace(/"/g, "&quot;");
   }
 
-  async function load(refreshMsg) {
+  async function load() {
     try {
       showError("");
       await authenticate();
-      if (refreshMsg) $("#errorBox").textContent = "";
       state = await api("/api/dashboard");
       $("#planTag").style.display = "";
       renderAll();
     } catch (e) {
-      showError(e.message);
+      renderEmptyState(e.message);
     }
   }
 
@@ -257,7 +282,7 @@
     });
   });
 
-  $("#refreshBtn").addEventListener("click", () => load(true));
+  $("#refreshBtn").addEventListener("click", () => load());
 
   if (TELEGRAM) {
     TELEGRAM.ready();
