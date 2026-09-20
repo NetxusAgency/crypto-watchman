@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     # Secret dev bypass that authenticates as ADMIN_TELEGRAM_ID when opening the
     # Mini App from a plain browser (?dev_token=...). Empty = disabled.
     MINI_APP_DEV_TOKEN: str = ""
+    # Lifetime of the one-time bot login code (seconds) minted by the Mini App.
+    MINI_APP_LOGIN_CODE_TTL_SECONDS: int = Field(default=300, ge=60)
 
     # Security
     SECRET_KEY: str = Field(default="change-me-to-a-very-secure-key")

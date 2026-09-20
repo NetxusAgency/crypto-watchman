@@ -138,6 +138,7 @@
     login.classList.remove("hidden");
     try {
       const meta = await api("/api/meta");
+      window._botUsername = meta.bot_username;
       const holder = $("#tg-login-widget");
       if (!meta.bot_username) {
         if (holder) {
@@ -154,6 +155,7 @@
           encodeURIComponent(location.origin + "/api/auth/return");
         const wrap = document.createElement("div");
         wrap.className = "redirect-wrap";
+
         const btn = document.createElement("button");
         btn.type = "button";
         btn.className = "redirect-btn";
@@ -164,14 +166,61 @@
           window.location.href = url;
         });
         wrap.appendChild(btn);
-        const code = document.createElement("div");
-        code.className = "meta";
-        code.textContent = url;
-        wrap.appendChild(code);
+
+        const codeBtn = document.createElement("button");
+        codeBtn.type = "button";
+        codeBtn.className = "redirect-btn code-login";
+        codeBtn.textContent = "Authorize in the bot (works everywhere)";
+        codeBtn.addEventListener("click", startCodeLogin);
+        wrap.appendChild(codeBtn);
+
         holder.appendChild(wrap);
       }
     } catch (e) {}
     return false;
+  }
+
+  let codePollActive = false;
+
+  async function startCodeLogin() {
+    try {
+      showError("");
+      renderEmptyState("Getting a login code…");
+      const r = await api("/api/auth/code", { method: "POST" });
+      const box = $("#codeLoginBox");
+      box.classList.remove("hidden");
+      $("#codeText").textContent = r.code;
+      $("#codeWait").textContent =
+        "Open Telegram → @" + (window._botUsername || "the bot") +
+        " → send: /login " + r.code;
+      pollForLogin(r.code);
+    } catch (e) {
+      renderEmptyState(e.message);
+    }
+  }
+
+  async function pollForLogin(code) {
+    codePollActive = true;
+    const box = $("#codeLoginBox");
+    for (let i = 0; i < 75; i++) {
+      if (!codePollActive) return;
+      await new Promise((res) => setTimeout(res, 2000));
+      try {
+        const r = await api("/api/auth/poll?code=" + encodeURIComponent(code));
+        if (r.token) {
+          codePollActive = false;
+          box.classList.add("hidden");
+          setToken(r);
+          state = await api("/api/dashboard");
+          $("#planTag").style.display = "";
+          renderAll();
+          return;
+        }
+      } catch (e) {}
+    }
+    codePollActive = false;
+    $("#codeWait").textContent =
+      "Code expired. Repeat the login to get a fresh code.";
   }
 
   /* called by the Telegram Login Widget after the user approves */

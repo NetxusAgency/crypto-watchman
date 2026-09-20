@@ -4,6 +4,8 @@ import time as real_time
 import urllib.parse
 from types import SimpleNamespace
 
+import pytest
+
 from app.api import security
 from app.api.routes import _serialize_alert, _serialize_wallet
 from app.bot.keyboards import mini_app_url
@@ -189,6 +191,78 @@ class TestSerializers:
         out = _serialize_alert(alert)
         assert out["description"] == "Price above 70,000.0000"
         assert out["alert_type"] == "price_above"
+
+
+class TestCodeLogin:
+    @pytest.fixture(autouse=True)
+    def in_memory_login_codes(self, monkeypatch):
+        from app.services import login_codes
+
+        async def _no_redis():
+            return None
+
+        monkeypatch.setattr(login_codes, "_redis_or_none", _no_redis)
+        login_codes._mem.clear()
+        yield
+        login_codes._mem.clear()
+        login_codes._mem.clear()
+
+    def _client(self):
+        from starlette.testclient import TestClient
+        from app.main import app
+        return TestClient(app)
+
+    def test_issue_code_returns_six_chars(self):
+        resp = self._client().post("/api/auth/code")
+        assert resp.status_code == 200
+        code = resp.json()["code"]
+        assert len(code) == 6 and code.isalnum() and code.isupper()
+
+    def test_poll_pending_before_approval(self):
+        code = self._client().post("/api/auth/code").json()["code"]
+        resp = self._client().get("/api/auth/poll", params={"code": code})
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "pending"}
+
+    def test_redeem_then_poll_returns_token(self, monkeypatch):
+        from app.services import login_codes
+
+        client = self._client()
+        code = client.post("/api/auth/code").json()["code"]
+
+        async def fake_get_or_create(session, telegram_id, username=None):
+            return SimpleNamespace(id=7, telegram_id=telegram_id, plan="pro", username="coder")
+
+        import app.api.routes as routes
+        monkeypatch.setattr(routes.db_service, "get_or_create_user", fake_get_or_create)
+
+        import asyncio
+        approved = asyncio.run(login_codes.redeem_login_code(code, 123456))
+        assert approved is True
+
+        resp = client.get("/api/auth/poll", params={"code": code})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "token" in data
+        assert data["user"]["telegram_id"] == 123456
+
+    def test_code_is_one_time(self):
+        from app.services import login_codes
+
+        client = self._client()
+        code = client.post("/api/auth/code").json()["code"]
+        import asyncio
+        asyncio.run(login_codes.redeem_login_code(code, 555))
+        assert client.get("/api/auth/poll", params={"code": code}).json()["token"]
+        assert client.get("/api/auth/poll", params={"code": code}).json() == {
+            "status": "pending"
+        }
+
+    def test_redeem_unknown_code_fails(self):
+        import asyncio
+        from app.services import login_codes
+
+        assert asyncio.run(login_codes.redeem_login_code("ZZZZZZ", 555)) is False
 
 
 class TestMeta:

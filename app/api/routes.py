@@ -141,6 +141,40 @@ async def auth_return(request: Request, session: AsyncSession = Depends(get_sess
     return RedirectResponse(f"{base}/app/#app_token={token}", status_code=302)
 
 
+@router.post("/auth/code")
+async def mini_app_login_code():
+    """Mint a one-time code the user sends to the bot as `/login CODE`."""
+    from app.services import login_codes
+
+    code = await login_codes.create_login_code()
+    logger.info("Issued Mini App login code %s", code)
+    return {"code": code}
+
+
+@router.get("/auth/poll")
+async def mini_app_login_poll(code: str, session: AsyncSession = Depends(get_session)):
+    """Polled by the Mini App until the /login code is approved in the bot."""
+    from app.services import login_codes
+
+    telegram_id = await login_codes.check_login_code(code)
+    if telegram_id is None:
+        return {"status": "pending"}
+
+    user = await db_service.get_or_create_user(
+        session=session, telegram_id=telegram_id
+    )
+    logger.info("Mini App code-login OK for tg %s (plan=%s)", telegram_id, user.plan)
+    return {
+        "token": security.issue_token(telegram_id),
+        "user": {
+            "id": user.id,
+            "telegram_id": telegram_id,
+            "plan": user.plan,
+            "username": user.username,
+        },
+    }
+
+
 def _serialize_wallet(wallet):
     balances = sorted(
         wallet.balances, key=lambda b: b.value_usd, reverse=True

@@ -147,6 +147,9 @@ body {
   cursor: pointer;
 }
 .redirect-btn:hover { background: var(--accent); color: #fff; }
+.code-login { margin-top: 8px; }
+.code-accent { font-size: 13px; color: var(--accent); }
+.code-big { font-size: 26px; font-weight: 800; letter-spacing: 4px; margin: 6px 0; font-family: monospace; }
 .desc { color: var(--text); font-size: 14px; margin-top: 4px; }
 .line-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 

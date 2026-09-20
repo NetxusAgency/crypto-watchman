@@ -6,6 +6,7 @@ from app.services import db_service
 
 router = Router(name="base_handlers")
 
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, session: AsyncSession):
     user = await db_service.get_or_create_user(
@@ -19,6 +20,31 @@ async def cmd_start(message: Message, session: AsyncSession):
         "I'm your Crypto & Forex market monitor. Tap a button below to get started.",
         reply_markup=main_menu_keyboard(),
     )
+
+
+@router.message(Command("login"))
+async def cmd_login(message: Message):
+    """Signs the user into the browser Mini App using a one-time code."""
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        await message.answer(
+            "🔐 Open the Mini App in your browser to get a login code, then send:\n"
+            "<code>/login CODE</code>",
+            parse_mode="HTML",
+        )
+        return
+    from app.services import login_codes
+
+    approved = await login_codes.redeem_login_code(
+        parts[1].strip(), message.from_user.id
+    )
+    if approved:
+        await message.answer("✅ Signed in! Your Mini App will refresh automatically.")
+    else:
+        await message.answer(
+            "❌ That code is invalid or expired. Generate a fresh one from the "
+            "Mini App and try again."
+        )
 
 @router.message(Command("help"))
 async def cmd_help(message: Message):
