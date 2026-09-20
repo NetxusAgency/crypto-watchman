@@ -134,15 +134,19 @@ body {
 .pill.NEUTRAL { background: rgba(138,147,173,.2); color: var(--muted); }
 .pill.MIXED { background: rgba(245,181,66,.2); color: var(--yellow); }
 
-.meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
-.redirect-login {
+.meta { color: var(--muted); font-size: 12px; margin-top: 8px; word-break: break-all; }
+.redirect-wrap { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.redirect-btn {
   display: inline-block;
-  margin-top: 10px;
+  background: none;
+  border: 1px solid var(--accent);
   color: var(--accent);
+  border-radius: 8px;
+  padding: 8px 14px;
   font-size: 13px;
-  text-decoration: none;
+  cursor: pointer;
 }
-.redirect-login:hover { text-decoration: underline; }
+.redirect-btn:hover { background: var(--accent); color: #fff; }
 .desc { color: var(--text); font-size: 14px; margin-top: 4px; }
 .line-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 

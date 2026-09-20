@@ -146,16 +146,29 @@
         }
         return false;
       }
-      if (meta.bot_id && holder && !document.querySelector("#tg-login-widget .redirect-login")) {
-        const a = document.createElement("a");
-        a.href =
+      if (meta.bot_id && holder && !document.querySelector("#tg-login-widget .redirect-wrap")) {
+        const url =
           "https://oauth.telegram.org/auth?bot_id=" + meta.bot_id +
           "&origin=" + encodeURIComponent(location.origin) +
           "&request_access=write&lang=en&return_to=" +
           encodeURIComponent(location.origin + "/api/auth/return");
-        a.className = "redirect-login";
-        a.textContent = "or continue with the browser redirect login →";
-        holder.appendChild(document.createElement("div")).appendChild(a);
+        const wrap = document.createElement("div");
+        wrap.className = "redirect-wrap";
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "redirect-btn";
+        btn.textContent = "Continue with the browser login →";
+        btn.addEventListener("click", () => {
+          console.log("watchman: redirect login ->", url);
+          renderEmptyState("Opening Telegram authorization…");
+          window.location.href = url;
+        });
+        wrap.appendChild(btn);
+        const code = document.createElement("div");
+        code.className = "meta";
+        code.textContent = url;
+        wrap.appendChild(code);
+        holder.appendChild(wrap);
       }
     } catch (e) {}
     return false;
