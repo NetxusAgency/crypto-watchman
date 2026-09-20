@@ -107,21 +107,16 @@
     const login = $("#loginPanel");
     if (!login) return false;
     login.classList.remove("hidden");
-    let meta = {};
     try {
-      meta = await api("/api/meta");
+      const meta = await api("/api/meta");
+      if (!meta.bot_username) {
+        const holder = $("#tg-login-widget");
+        if (holder) {
+          holder.innerHTML =
+            '<div class="sub">Sign-in with Telegram is not configured for this deployment yet.</div>';
+        }
+      }
     } catch (e) {}
-    const holder = $("#tg-login-widget");
-    if (meta.bot_username && holder && !holder.childElementCount) {
-      const s = document.createElement("script");
-      s.async = true;
-      s.src = "https://telegram.org/js/telegram-login.js";
-      s.setAttribute("data-telegram-login", meta.bot_username);
-      s.setAttribute("data-size", "large");
-      s.setAttribute("data-onauth", "onTelegramAuth(user)");
-      s.setAttribute("data-request-access", "write");
-      holder.appendChild(s);
-    }
     return false;
   }
 

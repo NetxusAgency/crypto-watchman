@@ -191,6 +191,33 @@ class TestSerializers:
         assert out["alert_type"] == "price_above"
 
 
+class TestMiniAppPage:
+    def test_index_renders_widget_with_username(self, monkeypatch):
+        monkeypatch.setattr(settings, "TELEGRAM_BOT_USERNAME", "@testbot")
+        from starlette.testclient import TestClient
+        from app.main import app
+        resp = TestClient(app).get("/app")
+        assert resp.status_code == 200
+        assert "Sign in with Telegram" in resp.text
+        assert 'data-telegram-login="@testbot"' in resp.text
+        assert "__BOT_USERNAME__" not in resp.text
+
+    def test_index_empty_username_replaced(self, monkeypatch):
+        monkeypatch.setattr(settings, "TELEGRAM_BOT_USERNAME", "")
+        from starlette.testclient import TestClient
+        from app.main import app
+        resp = TestClient(app).get("/app/")
+        assert resp.status_code == 200
+        assert "__BOT_USERNAME__" not in resp.text
+
+    def test_static_assets_served(self):
+        from starlette.testclient import TestClient
+        from app.main import app
+        for path in ("/app/app.js", "/app/styles.css"):
+            resp = TestClient(app).get(path)
+            assert resp.status_code == 200
+
+
 class TestMiniAppUrl:
     def test_https_url_ok(self, monkeypatch):
         monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "https://watchman.example.com")

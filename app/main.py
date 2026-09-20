@@ -3,7 +3,7 @@ import html
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiogram.exceptions import TelegramConflictError
@@ -283,11 +283,18 @@ _WEBAPP_DIR = Path(__file__).resolve().parent / "webapp"
 
 
 @app.get("/app", include_in_schema=False)
+@app.get("/app/", include_in_schema=False)
 async def mini_app_index():
-    return FileResponse(_WEBAPP_DIR / "index.html")
+    html_content = (_WEBAPP_DIR / "index.html").read_text(encoding="utf-8")
+    html_content = html_content.replace(
+        "__BOT_USERNAME__", html.escape(settings.TELEGRAM_BOT_USERNAME)
+    )
+    return HTMLResponse(content=html_content)
 
 
 app.include_router(api_router, prefix="/api")
 
-# Static assets for the Mini App (served after the explicit /app route above).
-app.mount("/app", StaticFiles(directory=_WEBAPP_DIR, html=True), name="mini_app")
+# Static assets for the Mini App (served after the explicit /app route above;
+# the index page is rendered above so the Telegram Login Widget gets the bot
+# username baked in at request time).
+app.mount("/app", StaticFiles(directory=_WEBAPP_DIR, html=False), name="mini_app")

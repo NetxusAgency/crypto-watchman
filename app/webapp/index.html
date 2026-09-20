@@ -27,7 +27,9 @@
       <div class="card-body">
         <div class="sub">You opened this Mini App outside Telegram. Log in with your Telegram account to view your dashboard.</div>
       </div>
-      <div id="tg-login-widget" style="margin-top:10px"></div>
+      <div id="tg-login-widget" style="margin-top:10px">
+        <script async src="https://telegram.org/js/telegram-login.js" data-telegram-login="__BOT_USERNAME__" data-size="large" data-onauth="onTelegramAuth(user)" data-request-access="write"></script>
+      </div>
     </div>
 
     <section id="tab-overview" class="tab-panel">
