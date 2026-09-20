@@ -150,8 +150,8 @@ class PublicRpcProvider:
 
     RPC_URL = "https://cloudflare-eth.com"
 
-    def __init__(self):
-        self.client = httpx.AsyncClient(timeout=20.0)
+    def __init__(self, client: httpx.AsyncClient | None = None):
+        self.client = client or httpx.AsyncClient(timeout=20.0)
 
     async def fetch_balances(self, address: str, network: str) -> list[TokenBalance]:
         net = normalize_network(network)
@@ -168,12 +168,14 @@ class PublicRpcProvider:
         }
         resp = await self.client.post(self.RPC_URL, json=payload)
         resp.raise_for_status()
-        result = resp.json().get("result")
+        body = resp.json()
+        err = body.get("error")
+        if err:
+            raise RuntimeError(f"Public RPC error: {err.get('message') or err}")
+        result = body.get("result")
         if not result:
-            raise RuntimeError("Public RPC returned no balance — check the address.")
+            raise RuntimeError("Public RPC returned no result for eth_getBalance.")
         quantity = int(result, 16) / 1e18
-        if quantity <= 0:
-            return []
 
         price_resp = await self.client.get(
             "https://api.coingecko.com/api/v3/simple/price",

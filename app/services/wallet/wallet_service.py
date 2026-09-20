@@ -23,8 +23,13 @@ def get_wallet_provider() -> WalletProvider:
     if _wallet_provider is None:
         if settings.COVALENT_API_KEY:
             _wallet_provider = CovalentWalletProvider(settings.COVALENT_API_KEY)
+            logger.info("Wallet provider: Covalent (full ERC-20 balances).")
         else:
             _wallet_provider = PublicRpcProvider()
+            logger.info(
+                "Wallet provider: keyless public RPC (native ETH only). "
+                "Set COVALENT_API_KEY for full token coverage."
+            )
     return _wallet_provider
 
 

@@ -1,9 +1,13 @@
+import asyncio
+
+from httpx import AsyncClient, MockTransport, Response
 from types import SimpleNamespace
 
 from app.services.wallet.providers import (
     normalize_network,
     parse_covalent_items,
     is_valid_address,
+    PublicRpcProvider,
 )
 from app.services.wallet.wallet_service import (
     format_wallet_summary,
@@ -121,3 +125,69 @@ class TestSummaryFormatting:
     def test_summary_empty(self):
         lines = format_wallet_summary([])
         assert "No wallets connected yet." in "\n".join(lines)
+
+
+def _rpc_provider(balance_hex: str | None, rpc_error: str | None = None):
+    """PublicRpcProvider wired to a mocked RPC + CoinGecko."""
+    def handler(request):
+        url = str(request.url)
+        if "cloudflare-eth.com" in url:
+            if rpc_error:
+                return Response(200, json={"jsonrpc": "2.0", "error": {"code": -32603, "message": rpc_error}, "id": 1})
+            return Response(200, json={"jsonrpc": "2.0", "result": balance_hex, "id": 1})
+        if "coingecko.com" in url:
+            return Response(200, json={"ethereum": {"usd": 2607.4868}})
+        return Response(404)
+
+    transport = MockTransport(handler)
+    return PublicRpcProvider(client=AsyncClient(transport=transport))
+
+
+class TestPublicRpcProvider:
+    def test_zero_balance_returns_eth_row(self):
+        async def run():
+            provider = _rpc_provider("0x0")
+            balances = await provider.fetch_balances(VALID, "ethereum")
+            await provider.close()
+            return balances
+
+        balances = asyncio.run(run())
+        assert len(balances) == 1
+        assert balances[0].symbol == "ETH"
+        assert balances[0].quantity == 0.0
+        assert balances[0].value_usd == 0.0
+
+    def test_balance_with_price(self):
+        async def run():
+            provider = _rpc_provider("0xde0b6b3a7640000")  # 1 ETH
+            balances = await provider.fetch_balances(VALID, "ethereum")
+            await provider.close()
+            return balances
+
+        balances = asyncio.run(run())
+        assert balances[0].quantity == 1.0
+        assert balances[0].value_usd == 2607.49
+
+    def test_jsonrpc_error_surfaces_real_message(self):
+        async def run():
+            provider = _rpc_provider(None, rpc_error="Internal error")
+            try:
+                await provider.fetch_balances(VALID, "ethereum")
+                assert False, "should raise"
+            except RuntimeError as e:
+                return str(e)
+
+        err = asyncio.run(run())
+        assert "Internal error" in err
+
+    def test_non_ethereum_rejected(self):
+        async def run():
+            provider = _rpc_provider("0x0")
+            try:
+                await provider.fetch_balances(VALID, "polygon")
+                assert False, "should raise"
+            except RuntimeError as e:
+                return str(e)
+
+        err = asyncio.run(run())
+        assert "COVALENT_API_KEY" in err
