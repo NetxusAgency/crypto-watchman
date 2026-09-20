@@ -1,6 +1,7 @@
 from app.services.opportunity.engine import (
     format_opportunities,
     format_opportunity,
+    is_elevated,
     priority_for,
     total_from_components,
 )
@@ -24,6 +25,23 @@ class TestPriority:
         assert priority_for(60) == "CRITICAL"
         assert priority_for(88) == "CRITICAL"
         assert priority_for(-45) == "HIGH"  # abs used
+
+
+class TestElevation:
+    def test_alerts_on_first_high(self):
+        assert is_elevated(None, "HIGH") is True
+        assert is_elevated("LOW", "CRITICAL") is True
+
+    def test_alerts_on_upgrade_to_critical(self):
+        assert is_elevated("HIGH", "CRITICAL") is True
+
+    def test_no_alert_when_still_elevated(self):
+        assert is_elevated("HIGH", "HIGH") is False
+        assert is_elevated("CRITICAL", "CRITICAL") is False
+
+    def test_no_alert_on_retreat(self):
+        assert is_elevated("HIGH", "MEDIUM") is False
+        assert is_elevated("CRITICAL", "LOW") is False
 
 
 class TestWeighting:

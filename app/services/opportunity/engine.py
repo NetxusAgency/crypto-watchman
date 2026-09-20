@@ -17,6 +17,8 @@ SOURCE_ICONS = {
     "social": "📢", "listing": "🚀", "whale": "🐋", "liquidity": "💧",
 }
 
+_ALERTABLE = {"HIGH", "CRITICAL"}
+
 
 def priority_for(score: float) -> str:
     abs_score = abs(score)
@@ -27,6 +29,14 @@ def priority_for(score: float) -> str:
     if abs_score >= 20:
         return "MEDIUM"
     return "LOW"
+
+
+def is_elevated(old_priority: str | None, new_priority: str) -> bool:
+    """True when a score newly reached HIGH/CRITICAL, or upgraded HIGH -> CRITICAL."""
+    old = old_priority or "LOW"
+    if new_priority in _ALERTABLE and old not in _ALERTABLE:
+        return True
+    return new_priority == "CRITICAL" and old == "HIGH"
 
 
 def total_from_components(components: list) -> tuple[float, int]:
@@ -107,28 +117,50 @@ async def refresh_event(session: AsyncSession, symbol: str) -> dict:
     return result
 
 
-async def refresh_opportunities(session: AsyncSession, symbols: list[str] | None = None) -> int:
-    """Background scan: compute + store scores for the given (or all portfolio) symbols."""
+async def refresh_opportunities(session: AsyncSession, symbols: list[str] | None = None) -> list[dict]:
+    """Background scan: compute + store scores for the given (or all portfolio) symbols.
+
+    Returns the opportunity dicts that newly reached HIGH/CRITICAL, so the caller
+    can push auto-alerts to users (never repeats while a level stays elevated).
+    """
     if symbols is None:
         symbols = await db_service.all_portfolio_symbols(session)
-    count = 0
-    for symbol in symbols:
+    elevated: list[dict] = []
+    for raw_symbol in symbols:
+        symbol = raw_symbol.upper().strip()
         try:
             signals = await collect_signals(session, symbol)
             total, direction = total_from_components(signals)
             result = {
-                "symbol": symbol.upper(),
+                "symbol": symbol,
                 "total_score": total,
                 "direction": direction,
                 "priority": priority_for(total),
                 "components": [c for c in signals if c.score != 0],
                 "evidence": "\n".join(f"{c.source}: {c.evidence}" for c in signals if c.evidence),
             }
+            old_priority = await _stored_priority(session, symbol)
             await persist_opportunity(session, result, signals)
-            count += 1
+            if is_elevated(old_priority, result["priority"]):
+                result["components"] = [
+                    {
+                        "source": c.source,
+                        "score": c.score,
+                        "evidence": c.evidence,
+                    }
+                    for c in result["components"]
+                ]
+                elevated.append(result)
         except Exception as e:
             logger.warning(f"Opportunity scan failed for {symbol}: {e}")
-    return count
+    return elevated
+
+
+async def _stored_priority(session: AsyncSession, symbol: str) -> str | None:
+    row = (
+        await session.execute(select(OpportunityScore.priority).where(OpportunityScore.symbol == symbol))
+    ).scalar_one_or_none()
+    return row or None
 
 
 async def get_latest_scores(session: AsyncSession) -> list[dict]:

@@ -1,4 +1,5 @@
 import asyncio
+import html
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -22,6 +23,7 @@ from app.services.assistant.strategies import seed_preset_strategies
 from app.services.assistant.klines import kline_fetcher
 from app.services.wallet import wallet_service
 from app.services.opportunity import engine as opportunity_engine
+from app.services.opportunity import PRIORITY_ICONS, format_opportunity
 
 # Additive DB columns added after a table already exists (create_all cannot add
 # columns to an existing table). Each entry is applied idempotently at startup.
@@ -123,11 +125,46 @@ async def lifespan(app: FastAPI):
     async def run_opportunity_scan():
         try:
             async with async_session_maker() as session:
-                count = await opportunity_engine.refresh_opportunities(session)
-            if count:
-                logger.info(f"Scored opportunities for {count} portfolio symbols.")
+                elevated = await opportunity_engine.refresh_opportunities(session)
+            if elevated:
+                logger.info(
+                    f"Opportunity scan: {len(elevated)} asset(s) reached "
+                    f"HIGH/CRITICAL, notifying pro/premium users."
+                )
+                await notify_elevated_opportunities(elevated)
+            else:
+                logger.info("Opportunity scan: refreshed scores, no new HIGH/CRITICAL alerts.")
         except Exception as e:
             logger.warning(f"Opportunity background scan failed: {e}")
+
+    async def notify_elevated_opportunities(elevated: list[dict]):
+        from sqlalchemy import select
+        from app.database.models import User, Notification
+        from app.bot.dispatcher import bot
+        async with async_session_maker() as session:
+            stmt = select(User).where(User.plan.in_(["pro", "premium"]))
+            users = (await session.execute(stmt)).scalars().all()
+            if not users:
+                return
+            for item in elevated:
+                body = (
+                    f"🚨 <b>{html.escape(item['symbol'])} opportunity — "
+                    f"{PRIORITY_ICONS.get(item['priority'], '')} {item['priority']}</b>\n\n"
+                    f"{format_opportunity(item)}\n\n"
+                    "<i>Catalyst score from the Opportunity Engine. Use 🎯 Assistant for a full trade plan.</i>"
+                )
+                for user in users:
+                    try:
+                        await bot.send_message(chat_id=user.telegram_id, text=body, parse_mode="HTML")
+                        session.add(
+                            Notification(
+                                user_id=user.id,
+                                message=f"Opportunity {item['symbol']} reached {item['priority']}",
+                            )
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to send opportunity alert to User {user.id}: {e}")
+                await session.commit()
 
     scheduler.add_job(run_alert_check, "interval", seconds=30)
     scheduler.add_job(run_listing_check, "interval", minutes=2)

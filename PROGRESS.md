@@ -226,7 +226,8 @@ Built a quantitative and AI-driven trade analysis assistant that computes multi-
 - Each component: `score = weight × strength(0..1) × direction(±1/0)`. Total clamped to [−100, 100]; priority tiers: CRITICAL ≥60, HIGH ≥40, MEDIUM ≥20, else LOW.
 - Command/menu reads **cached** scores (fast); 🔄 Recompute runs a live scan (klines + social + news read) over the user's assets.
 - Background job keeps scores warm for every portfolio symbol; listing events feed the listing signal automatically.
-- 13 new unit tests (priority tiers, weighted totals, clamping, component scoring, formatting, listing base-symbol normalization); full suite: **101 passed in 36s**.
+- **Auto-alerts (2F follow-up):** when a background scan lifts a score into HIGH or CRITICAL (first elevation, or HIGH → CRITICAL upgrade), a 🚨 opportunity alert is pushed to every `pro`/`premium` user and a `Notification` row is stored. `refresh_opportunities` returns the list of newly elevated scores; `is_elevated` guards against re-sending while a level stays elevated.
+- 18 unit tests (priority tiers, weighted totals, clamping, component scoring, formatting, elevation logic, listing base-symbol normalization); full suite: **109 passed in 34s**.
 
 ---
 
