@@ -13,6 +13,7 @@ Full design lives in `PHASE_2_IMPLEMENTATION.md`.
 | 2D | Web3 Portfolio | **Implemented & tested** |
 | 2E | Telegram Mini App | **Implemented & tested** |
 | 2F | Opportunity Engine | **Implemented & tested** |
+| 2G | Automated Trading (paper-first) | **Core implemented & tested** |
 
 ---
 
@@ -232,6 +233,39 @@ Built a quantitative and AI-driven trade analysis assistant that computes multi-
 ---
 
 ## Next up: Phase 3 — payments/tiering · notification_preferences wiring
+
+---
+
+## 2G — Automated Trading (paper-first core) 🔶
+
+### Scope
+Phase 2E is taken by the Mini App, so this hardening phase is logged as **2G**. Principles from the architecture brief:
+- The **AI never decides or executes**. A deterministic strategy engine produces structured rules → plan → then (risked) proposals; AI only interprets if added later.
+- Every proposal has to pass the **RiskEngine gate** before the execution layer sees it.
+- All execution is **PAPER_ONLY** — nothing produced today can touch a live broker.
+
+### New files
+- `app/services/trading/indicators.py` — deterministic Stochastic (`calculate_stochastic` → %K/%D + aligned series) and Fibonacci retracement levels (`fibonacci_levels`, 0/0.236/0.382/0.5/0.618/0.786/1).
+- `app/services/trading/strategy_engine.py` — rule engine: `MarketContext`/`build_market_context`, `StrategySpec`, `preset_specs()` (trend_pullback, breakout, mean_reversion, momentum_reversal, general), `spec_from_definition` (preset keys or legacy free-text), a `_CHECKS` registry (~24 deterministic checks incl. RSI, EMA alignment, MACD histogram, BB reaction/width, stochastic levels+crossovers, fib zone, volume surge, swing highs/lows, min R:R, market staleness), `_MIRROR` mapping for SHORT flip, and `evaluate_signal` (setup confirmed only when **all** entry rules pass; `_heuristic_entry` fallback for rules-free custom strategies).
+- `app/services/trading/trade_plan.py` — machine-readable `TradePlan` (`plan_id`, direction, entry zone, stop, TP1/TP2, invalidation, R:R, stage) with `paper_only: true` asserted in serialization; `build_trade_plan` derives levels deterministically from the confirmed signal + stop/take rule shapes.
+- `app/services/trading/risk.py` — `RiskEngine` gate (8 checks: market-open/freshness, symbol supported, valid strategy setup, no duplicate position, sound stop, position sizing feasible without leverage, min R:R ≥ 1, daily loss limit) + `position_size` sizing to the risk budget.
+- `app/services/trading/manager.py` — `PlanManager` state machine (ANALYSING → SETUP_FOUND → RISK_CHECK → PAPER_PENDING → PAPER_OPEN/REJECTED) with `evaluate` / `assess` / `commit` / `monitor`.
+- `app/execution/base.py` — `ExecutionGateway` ABC + `ExecutionResult`.
+- `app/execution/paper.py` — pure, DB-free paper engine: `PaperState`/`PaperPositionState`, `PaperExecutionEngine` (zone fill, duplicate guard, fees, SL/TP/invalidation triggers, P&L, win rate, profit factor).
+- `app/execution/gateway.py` — `PaperGateway` persisting paper fills/positions and `mark_account` for the monitor.
+- `app/services/trading/backtester.py` — deterministic walk-forward backtest (rolling window evaluation, zone-fill intrabar SL/TP, one position at a time) → `BacktestReport.summary()` (trades, win rate, profit factor, net P&L, max drawdown, avg holding, consecutive losses).
+- `app/database/models/paper.py` — `PaperAccount` ($10k default), `PaperPosition`, `PaperFill`.
+
+### Modified files
+- `app/database/models/__init__.py` — register paper models; `User.paper_accounts` relationship.
+
+### Tests
+- `tests/test_trading.py` (28), `tests/test_paper.py` (13), `tests/test_backtester.py` (4): full suite **190 passed**. Includes direction mirroring, per-rule results, market staleness, position sizing budget, fee accounting, TP/SL ordering, backtest report shape.
+
+### Remaining for 2G
+- Live scheduler wiring: evaluate portfolio symbols on a cadence, route confirmed plans through `PlanManager`, send Telegram paper alerts.
+- API endpoints + Mini App Strategy / Paper Trading tabs.
+- API endpoints + Mini App Strategy / Paper Trading tabs (next).
 
 ---
 
