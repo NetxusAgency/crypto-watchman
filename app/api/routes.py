@@ -337,3 +337,75 @@ async def dashboard(
         ],
         "news": news,
     }
+
+
+@router.get("/trading")
+async def trading_overview(
+    session: AsyncSession = Depends(get_session),
+    telegram_id: int = Depends(require_telegram_id),
+):
+    """Paper trading read-model: armed strategies, paper account, open/closed trades."""
+    from app.database.models import PaperPosition
+    from app.execution.gateway import get_or_create_paper_account
+    from app.services.trading.strategy_engine import preset_specs
+
+    user = await db_service.get_or_create_user(session, telegram_id=telegram_id)
+    account = await get_or_create_paper_account(session, user.id)
+
+    open_positions = (
+        await session.execute(
+            select(PaperPosition)
+            .where(PaperPosition.account_id == account.id, PaperPosition.status == "OPEN")
+            .order_by(PaperPosition.opened_at.desc())
+        )
+    ).scalars().all()
+    recent_closed = (
+        await session.execute(
+            select(PaperPosition)
+            .where(PaperPosition.account_id == account.id, PaperPosition.status == "CLOSED")
+            .order_by(PaperPosition.closed_at.desc())
+            .limit(12)
+        )
+    ).scalars().all()
+
+    def _pos(p):
+        return {
+            "plan_id": p.plan_id,
+            "symbol": p.symbol,
+            "direction": p.direction,
+            "strategy_key": p.strategy_key,
+            "entry_price": round(p.entry_price, 6),
+            "quantity": p.quantity,
+            "stop_loss": round(p.stop_loss, 6),
+            "take_profit_1": round(p.take_profit_1, 6) if p.take_profit_1 else None,
+            "take_profit_2": round(p.take_profit_2, 6) if p.take_profit_2 else None,
+            "status": p.status,
+            "close_reason": p.close_reason,
+            "realized_pnl": round(p.realized_pnl, 2) if p.realized_pnl is not None else None,
+            "opened_at": p.opened_at.isoformat() if p.opened_at else None,
+            "closed_at": p.closed_at.isoformat() if p.closed_at else None,
+        }
+
+    strategies = [
+        {
+            "key": key,
+            "name": spec.name,
+            "description": spec.description,
+            "direction": spec.direction,
+            "timeframes": spec.timeframes,
+        }
+        for key, spec in preset_specs().items()
+    ]
+    return {
+        "paper_only": True,
+        "monitor_timeframe": "4h",
+        "strategies": strategies,
+        "account": {
+            "initial_balance": round(account.initial_balance, 2),
+            "cash": round(account.cash, 2),
+            "equity": round(account.equity, 2),
+            "open_count": len(open_positions),
+        },
+        "open_positions": [_pos(p) for p in open_positions],
+        "recent_closed": [_pos(p) for p in recent_closed],
+    }

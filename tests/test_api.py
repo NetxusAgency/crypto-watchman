@@ -285,6 +285,30 @@ class TestMeta:
         assert resp.json()["bot_id"] == ""
 
 
+class TestTradingEndpoint:
+    def _client(self):
+        from starlette.testclient import TestClient
+        from app.main import app
+        return TestClient(app)
+
+    def test_requires_auth_token(self):
+        resp = self._client().get("/api/trading")
+        assert resp.status_code == 401
+
+    def test_invalid_token_rejected(self):
+        resp = self._client().get("/api/trading", headers={"X-App-Token": "garbage"})
+        assert resp.status_code == 401
+
+    def test_presets_are_paper_first(self):
+        from app.services.trading.strategy_engine import preset_specs
+
+        spec = preset_specs()
+        assert "trend_pullback" in spec and "momentum_reversal" in spec
+        for key, s in spec.items():
+            assert s.key == key
+            assert s.entry_rules or s.stop_loss_rules or s.take_profit_rules or s.risk_rules
+
+
 class TestAuthReturn:
     def _client(self):
         from starlette.testclient import TestClient

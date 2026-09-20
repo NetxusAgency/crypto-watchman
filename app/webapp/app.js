@@ -130,6 +130,18 @@
     if (login) login.classList.add("hidden");
   }
 
+  async function loadState() {
+    state = await api("/api/dashboard");
+    try {
+      state.trading = await api("/api/trading");
+    } catch (e) {
+      state.trading = null;
+    }
+    $("#planTag").style.display = "";
+    renderAll();
+    return state;
+  }
+
   async function showTelegramLogin() {
     showError("");
     renderEmptyState("Sign in with Telegram to continue.");
@@ -211,9 +223,7 @@
           codePollActive = false;
           box.classList.add("hidden");
           setToken(r);
-          state = await api("/api/dashboard");
-          $("#planTag").style.display = "";
-          renderAll();
+          await loadState();
           return;
         }
       } catch (e) {}
@@ -232,8 +242,7 @@
         body: JSON.stringify({ widget: user }),
       });
       setToken(data);
-      state = await api("/api/dashboard");
-      renderAll();
+      await loadState();
     } catch (e) {
       renderEmptyState(e.message);
     }
@@ -386,6 +395,60 @@
       .join("");
   }
 
+  function renderTrading() {
+    const panel = $("#tradingPanel .card-body");
+    const t = state.trading;
+    if (!t) {
+      panel.classList.add("empty");
+      panel.textContent = "Paper trading data is not ready yet. Add assets and let the monitor scan.";
+      return;
+    }
+    panel.classList.remove("empty");
+
+    const acc = t.account || {};
+    const rows = [
+      `<div class="row"><div><b>Paper balance</b></div><div class="val accent"><b>${fmtUsd(acc.cash)}</b></div></div>`,
+      `<div class="row"><div class="sub">Equity</div><div class="val">${fmtUsd(acc.equity)}</div></div>`,
+      `<div class="row"><div class="sub">Open positions</div><div class="val">${acc.open_count}</div></div>`,
+      `<div class="row"><div class="sub">Account type</div><div class="val">PAPER-ONLY</div></div>`,
+    ].join("");
+
+    const open = t.open_positions || [];
+    const openRows = open.length
+      ? open.map(
+          (p) =>
+            rowHTML(
+              `<div><b>${p.symbol} ${p.direction}</b><div class="sub">${escapeHtml(p.strategy_key)} · entry ${fmt(p.entry_price)} · SL ${fmt(p.stop_loss)}</div></div>` +
+              `<div class="val">${p.quantity} @ ${fmt(p.entry_price)}</div>`
+            )
+        ).join("")
+      : '<div class="sub" style="padding:8px 0">No open paper positions.</div>';
+
+    const closed = t.recent_closed || [];
+    const closedRows = closed.length
+      ? closed.map(
+          (p) =>
+            rowHTML(
+              `<div><b>${p.symbol} ${p.close_reason || "CLOSED"}</b><div class="sub">${p.opened_at ? p.opened_at.slice(0, 10) : ""}</div></div>` +
+              `<div class="${pctClass(p.realized_pnl)}"><b>${p.realized_pnl != null ? (p.realized_pnl >= 0 ? "+" : "") + p.realized_pnl.toFixed(2) : "—"}</b></div>`
+            )
+        ).join("")
+      : '<div class="sub" style="padding:8px 0">No closed trades yet. Confirmed setups open paper trades automatically.</div>';
+
+    const strategies = t.strategies || [];
+    const stratRows = strategies.length
+      ? strategies
+          .map((s) => rowHTML(`<div><b>${escapeHtml(s.name)}</b><div class="sub">${escapeHtml(s.description)}</div></div><div class="val sub">${(s.timeframes || []).join(" · ")}</div>`))
+          .join("")
+      : "";
+
+    panel.innerHTML =
+      rows +
+      '<h4 class="section-h">Open positions</h4>' + openRows +
+      '<h4 class="section-h">Recent closed</h4>' + closedRows +
+      (stratRows ? '<h4 class="section-h">Armed strategies (deterministic rules)</h4>' + stratRows : "");
+  }
+
   function escapeHtml(s) {
     return String(s)
       .replace(/&/g, "&amp;")
@@ -413,23 +476,17 @@
     try {
       showError("");
       if (await tokenFromFragment()) {
-        state = await api("/api/dashboard");
-        $("#planTag").style.display = "";
-        renderAll();
+        await loadState();
         return;
       }
       const fromQuery = await tryLoginFromQuery();
       if (fromQuery) {
-        state = await api("/api/dashboard");
-        $("#planTag").style.display = "";
-        renderAll();
+        await loadState();
         return;
       }
       const ok = await authenticate();
       if (!ok) return;
-      state = await api("/api/dashboard");
-      $("#planTag").style.display = "";
-      renderAll();
+      await loadState();
     } catch (e) {
       renderEmptyState(e.message);
     }
@@ -439,6 +496,7 @@
     renderPortfolio();
     renderWallets();
     renderOpps();
+    renderTrading();
     renderAlerts();
     renderNews();
   }

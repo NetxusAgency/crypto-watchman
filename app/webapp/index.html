@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link rel="stylesheet" href="/app/styles.css?v=6">
+  <link rel="stylesheet" href="/app/styles.css?v=7">
   <title>Watchman Mini App</title>
 </head>
 <body>
@@ -17,6 +17,7 @@
     <button class="tab active" data-tab="overview">📊 Overview</button>
     <button class="tab" data-tab="wallets">👛 Wallets</button>
     <button class="tab" data-tab="opps">💡 Opportunities</button>
+    <button class="tab" data-tab="trading">📈 Trading</button>
     <button class="tab" data-tab="alerts">🔔 Alerts</button>
     <button class="tab" data-tab="news">📰 News</button>
   </nav>
@@ -50,6 +51,13 @@
       <div id="oppsPanel" class="card"><h3>Opportunity Scores</h3><div class="card-body empty">Loading…</div></div>
     </section>
 
+    <section id="tab-trading" class="tab-panel hidden">
+      <div id="tradingPanel" class="card">
+        <h3>Paper Trading <span class="chip">PAPER-ONLY</span></h3>
+        <div class="card-body empty">Loading…</div>
+      </div>
+    </section>
+
     <section id="tab-alerts" class="tab-panel hidden">
       <div id="alertsPanel" class="card"><h3>Active Alerts</h3><div class="card-body empty">Loading…</div></div>
       <div id="notifsPanel" class="card"><h3>Notifications</h3><div class="card-body empty">Loading…</div></div>
@@ -62,6 +70,6 @@
     <div id="errorBox" class="error hidden"></div>
   </main>
 
-  <script src="/app/app.js?v=6"></script>
+  <script src="/app/app.js?v=7"></script>
 </body>
 </html>
