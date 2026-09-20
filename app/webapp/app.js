@@ -152,7 +152,7 @@
           "https://oauth.telegram.org/auth?bot_id=" + meta.bot_id +
           "&origin=" + encodeURIComponent(location.origin) +
           "&request_access=write&lang=en&return_to=" +
-          encodeURIComponent(location.origin + location.pathname);
+          encodeURIComponent(location.origin + "/api/auth/return");
         a.className = "redirect-login";
         a.textContent = "or continue with the browser redirect login →";
         holder.appendChild(document.createElement("div")).appendChild(a);
@@ -332,9 +332,30 @@
       .replace(/"/g, "&quot;");
   }
 
+  async function tokenFromFragment() {
+    const m = window.location.hash.match(/#app_token=([^&]+)/);
+    if (m) {
+      token = decodeURIComponent(m[1]);
+      history.replaceState({}, "", window.location.pathname);
+      return true;
+    }
+    if (window.location.hash.indexOf("#app_error=1") === 0) {
+      history.replaceState({}, "", window.location.pathname);
+      renderEmptyState("Login failed — the signature from Telegram did not verify.");
+      return false;
+    }
+    return false;
+  }
+
   async function load() {
     try {
       showError("");
+      if (await tokenFromFragment()) {
+        state = await api("/api/dashboard");
+        $("#planTag").style.display = "";
+        renderAll();
+        return;
+      }
       const fromQuery = await tryLoginFromQuery();
       if (fromQuery) {
         state = await api("/api/dashboard");

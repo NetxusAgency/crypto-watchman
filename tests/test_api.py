@@ -211,6 +211,40 @@ class TestMeta:
         assert resp.json()["bot_id"] == ""
 
 
+class TestAuthReturn:
+    def _client(self):
+        from starlette.testclient import TestClient
+        from app.main import app
+        return TestClient(app)
+
+    def test_success_redirects_with_token(self, monkeypatch):
+        monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "8662411684:REALTOKEN" + "F")
+        token_part = "8662411684:REALTOKENF"
+
+        async def fake_get_or_create(session, telegram_id, username=None):
+            return SimpleNamespace(id=1, telegram_id=telegram_id, plan="pro", username=username)
+
+        import app.api.routes as routes
+        monkeypatch.setattr(routes.db_service, "get_or_create_user", fake_get_or_create)
+
+        fields = _build_widget(bot_token=token_part)
+        resp = self._client().get("/api/auth/return", params=fields, follow_redirects=False)
+        assert resp.status_code == 302
+        loc = resp.headers["location"]
+        assert settings.PUBLIC_BASE_URL.rstrip("/") in loc
+        assert "#app_token=" in loc
+
+    def test_bad_signature_goes_to_error(self, monkeypatch):
+        monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "8662411684:REALTOKENF")
+        resp = self._client().get(
+            "/api/auth/return",
+            params={"id": "1", "hash": "bad", "auth_date": "1"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 302
+        assert "#app_error=1" in resp.headers["location"]
+
+
 class TestMiniAppPage:
     def test_index_renders_widget_with_username(self, monkeypatch):
         monkeypatch.setattr(settings, "TELEGRAM_BOT_USERNAME", "@testbot")

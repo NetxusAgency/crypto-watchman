@@ -8,7 +8,8 @@ The Mini App sits on top of data the bot already collects — no writes here yet
 import html
 import logging
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -93,6 +94,9 @@ async def auth(payload: AuthPayload):
     if telegram_id is None:
         raise HTTPException(status_code=401, detail="Invalid Telegram WebApp initData")
 
+    logger.info("Mini App auth OK via %r for tg %s",
+                "initData" if payload.init_data else ("widget" if payload.widget else "dev_token"),
+                telegram_id)
     async with async_session_maker() as session:
         user = await db_service.get_or_create_user(
             session=session,
@@ -108,6 +112,33 @@ async def auth(payload: AuthPayload):
             "username": user.username,
         },
     }
+
+
+@router.get("/auth/return", include_in_schema=False)
+async def auth_return(request: Request, session: AsyncSession = Depends(get_session)):
+    """Full-page Telegram Login Widget fallback.
+
+    `oauth.telegram.org` redirects the browser back to `return_to` (this
+    endpoint) with the signed fields in the query string; we validate
+    server-side and bounce the browser back to the Mini App with a token in
+    the URL fragment (never in logs/server).
+    """
+    fields = {k: v for k, v in request.query_params.items()}
+
+    base = settings.PUBLIC_BASE_URL.rstrip("/")
+    user_info = security.validate_widget_fields(fields, settings.TELEGRAM_BOT_TOKEN)
+    if not user_info:
+        logger.warning("Mini App return-auth rejected: bad widget signature")
+        return RedirectResponse(f"{base}/app/#app_error=1", status_code=302)
+
+    user = await db_service.get_or_create_user(
+        session=session,
+        telegram_id=user_info["id"],
+        username=user_info.get("username"),
+    )
+    token = security.issue_token(user_info["id"])
+    logger.info("Mini App redirect-auth OK for tg %s (plan=%s)", user_info["id"], user.plan)
+    return RedirectResponse(f"{base}/app/#app_token={token}", status_code=302)
 
 
 def _serialize_wallet(wallet):
