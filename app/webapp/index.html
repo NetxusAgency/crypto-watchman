@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/app/styles.css">
+  <title>Watchman Mini App</title>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">🛰 Watchman <span id="planTag" class="chip"></span></div>
+    <button id="refreshBtn" class="icon-btn" title="Refresh">⟳</button>
+  </div>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="overview">📊 Overview</button>
+    <button class="tab" data-tab="wallets">👛 Wallets</button>
+    <button class="tab" data-tab="opps">💡 Opportunities</button>
+    <button class="tab" data-tab="alerts">🔔 Alerts</button>
+    <button class="tab" data-tab="news">📰 News</button>
+  </nav>
+
+  <main>
+    <section id="tab-overview" class="tab-panel">
+      <div id="portfolioPanel" class="card"><h3>Portfolio</h3><div class="card-body empty">Loading…</div></div>
+      <div id="pnlRow" class="pnl hidden"></div>
+    </section>
+
+    <section id="tab-wallets" class="tab-panel hidden">
+      <div id="walletsPanel" class="card"><h3>Connected Wallets</h3><div class="card-body empty">Loading…</div></div>
+    </section>
+
+    <section id="tab-opps" class="tab-panel hidden">
+      <div id="oppsPanel" class="card"><h3>Opportunity Scores</h3><div class="card-body empty">Loading…</div></div>
+    </section>
+
+    <section id="tab-alerts" class="tab-panel hidden">
+      <div id="alertsPanel" class="card"><h3>Active Alerts</h3><div class="card-body empty">Loading…</div></div>
+      <div id="notifsPanel" class="card"><h3>Notifications</h3><div class="card-body empty">Loading…</div></div>
+    </section>
+
+    <section id="tab-news" class="tab-panel hidden">
+      <div id="newsPanel" class="card"><h3>News Sentiment</h3><div class="card-body empty">Loading…</div></div>
+    </section>
+
+    <div id="errorBox" class="error hidden"></div>
+  </main>
+
+  <script src="/app/app.js"></script>
+</body>
+</html>

@@ -1,8 +1,25 @@
+import urllib.parse
+
 from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton,
+    WebAppInfo,
 )
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
+
+from app.core.config import settings
+
+
+def mini_app_url() -> str | None:
+    """Mini App launch URL, or None when it cannot be opened from Telegram."""
+    base = settings.PUBLIC_BASE_URL.strip().rstrip("/")
+    if not base:
+        return None
+    parsed = urllib.parse.urlsplit(base)
+    if parsed.scheme == "https" or parsed.hostname in ("localhost", "127.0.0.1"):
+        return f"{base}/app/"
+    # Telegram refuses non-HTTPS Mini App URLs (local hosts excluded).
+    return None
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -19,6 +36,9 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     builder.button(text="🎯 Assistant")
     builder.button(text="⚙️ Settings")
     builder.button(text="❓ Help")
+    url = mini_app_url()
+    if url:
+        builder.button(text="🛰 Mini App", web_app=WebAppInfo(url=url))
     builder.adjust(3, 3, 3, 3)
     return builder.as_markup(resize_keyboard=True, input_field_placeholder="Choose an option...")
 

@@ -1,7 +1,10 @@
 import asyncio
 import html
 from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiogram.exceptions import TelegramConflictError
 from sqlalchemy import text
@@ -24,6 +27,7 @@ from app.services.assistant.klines import kline_fetcher
 from app.services.wallet import wallet_service
 from app.services.opportunity import engine as opportunity_engine
 from app.services.opportunity import PRIORITY_ICONS, format_opportunity
+from app.api import router as api_router
 
 # Additive DB columns added after a table already exists (create_all cannot add
 # columns to an existing table). Each entry is applied idempotently at startup.
@@ -272,3 +276,18 @@ async def health():
         "service": "Crypto & Forex Watchman API",
         "bot_configured": settings.TELEGRAM_BOT_TOKEN != "your_telegram_bot_token_here"
     }
+
+
+# Phase 2E — Telegram Mini App
+_WEBAPP_DIR = Path(__file__).resolve().parent / "webapp"
+
+
+@app.get("/app", include_in_schema=False)
+async def mini_app_index():
+    return FileResponse(_WEBAPP_DIR / "index.html")
+
+
+app.include_router(api_router, prefix="/api")
+
+# Static assets for the Mini App (served after the explicit /app route above).
+app.mount("/app", StaticFiles(directory=_WEBAPP_DIR, html=True), name="mini_app")

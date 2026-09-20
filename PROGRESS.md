@@ -9,10 +9,10 @@ Full design lives in `PHASE_2_IMPLEMENTATION.md`.
 |-------|---------|--------|
 | 2A | AI News + Market Sentiment Engine | **Implemented & tested** |
 | 2B | Multi-Asset Whale Monitoring | **Implemented & tested** |
-| 2C | AI Trading Assistant | **Implemented & tested** (this delivery) |
-| 2D | Web3 Portfolio | Not started |
-| 2E | Telegram Mini App | Not started |
-| 2F | Opportunity Engine | Not started |
+| 2C | AI Trading Assistant | **Implemented & tested** |
+| 2D | Web3 Portfolio | **Implemented & tested** |
+| 2E | Telegram Mini App | **Implemented & tested** |
+| 2F | Opportunity Engine | **Implemented & tested** |
 
 ---
 
@@ -231,4 +231,28 @@ Built a quantitative and AI-driven trade analysis assistant that computes multi-
 
 ---
 
-## Next up: Phase 2E — Mini App (deferred) · Phase 3 — payments/tiering
+## Next up: Phase 3 — payments/tiering · notification_preferences wiring
+
+---
+
+## 2E — Telegram Mini App ✅
+
+### Scope
+A Telegram Mini App (web front end over the FastAPI) that renders the user's live data with a signed, replay-safe auth flow. Phase order note: 2E was deferred behind 2F and shipped after it.
+
+### New files
+- `app/api/security.py` — Telegram WebApp `initData` HMAC-SHA256 validation (search-vector key from bot token, 24h freshness window) + short-lived signed app tokens (`issue_token`/`parse_token`, HMAC over `SECRET_KEY`).
+- `app/api/routes.py` — `POST /api/auth` (exchange initData for app token, auto-creates user via `get_or_create_user`) and `GET /api/dashboard` (single payload: user/plan, priced portfolio + P&L, wallets + balances, cached opportunity scores, active alerts, recent notifications, latest news analyses). Auth via `X-App-Token` header; read-only.
+- `app/webapp/index.html`, `app/webapp/app.js`, `app/webapp/styles.css` — zero-build SPA (dark crypto theme, light-mode via media query), tabs: Overview / Wallets / Opportunities / Alerts / News; uses `window.Telegram.WebApp.initData`, `expand()`/`ready()`, pulled refresh button.
+- `tests/test_api.py` — initData validation (valid/tampered/expired/wrong-token/placeholder), token round-trip + expiry, serializers, `mini_app_url` policy (https/localhost only).
+
+### Modified files
+- `app/core/config.py` — `PUBLIC_BASE_URL` (default `http://localhost:8000`) + `MINI_APP_TOKEN_TTL_HOURS` (default 24).
+- `app/bot/keyboards.py` — `mini_app_url()` helper + 🛰 Mini App WebApp reply-button when `PUBLIC_BASE_URL` is https or localhost (Telegram refuses non-HTTPS remote URLs).
+- `app/main.py` — mounts the SPA at `/app` (`StaticFiles` + explicit `/app` FileResponse) and registers the `/api` router.
+
+### Behavior
+- Opening the 🛰 Mini App button boots Telegram-injected initData → `/api/auth` → token → `/api/dashboard`. Outside Telegram the page shows a friendly error.
+- `PUBLIC_BASE_URL` must point at the deployed HTTPS host (e.g. Render) for the button to appear and work; default localhost target supports dev via BotFather/localhost preview.
+- Dashboard reads only — mutations stay in the bot (connect wallets, set alerts, recompute scores). Prices fetched live via `price_fetcher`; everything else cached by the background jobs.
+- 16 new unit tests; full suite: **125 passed in 23s**.

@@ -64,6 +64,11 @@ class Settings(BaseSettings):
     # Opportunity engine (Phase 2F)
     OPPORTUNITY_SCAN_MINUTES: int = Field(default=15, ge=5)
 
+    # Mini App (Phase 2E)
+    PUBLIC_BASE_URL: str = Field(default="http://localhost:8000")
+    # Mini App auth token lifetime (hours)
+    MINI_APP_TOKEN_TTL_HOURS: int = Field(default=24, ge=1)
+
     # Security
     SECRET_KEY: str = Field(default="change-me-to-a-very-secure-key")
 
