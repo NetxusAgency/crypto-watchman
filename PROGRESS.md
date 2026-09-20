@@ -13,7 +13,7 @@ Full design lives in `PHASE_2_IMPLEMENTATION.md`.
 | 2D | Web3 Portfolio | **Implemented & tested** |
 | 2E | Telegram Mini App | **Implemented & tested** |
 | 2F | Opportunity Engine | **Implemented & tested** |
-| 2G | Automated Trading (paper-first) | **Core implemented & tested** |
+| 2G | Automated Trading (paper-first) | **Implemented & tested** |
 
 ---
 
@@ -260,12 +260,16 @@ Phase 2E is taken by the Mini App, so this hardening phase is logged as **2G**. 
 - `app/database/models/__init__.py` — register paper models; `User.paper_accounts` relationship.
 
 ### Tests
-- `tests/test_trading.py` (28), `tests/test_paper.py` (13), `tests/test_backtester.py` (4): full suite **190 passed**. Includes direction mirroring, per-rule results, market staleness, position sizing budget, fee accounting, TP/SL ordering, backtest report shape.
+- `tests/test_trading.py` (28), `tests/test_paper.py` (13), `tests/test_backtester.py` (4), `tests/test_monitor.py` (4), `tests/test_api.py` (+3 trading-endpoint): full suite **197 passed**. Includes direction mirroring, per-rule results, market staleness, position sizing budget, fee accounting, TP/SL ordering, backtest report shape, monitor presets, and the `/api/trading` read-model auth.
+
+### Monitor wiring (shipped)
+- `app/services/trading/monitor.py` — `TradingMonitor.scan_once` (all portfolio symbols × armed presets → PlanManager → paper open + 📈 Telegram card) and `mark_all` (live prices → close STOP/TP → 🛑/🎯 Telegram close alerts).
+- `app/main.py` — scheduler jobs `TRADING_SCAN_MINUTES` (15) + `TRADING_MARK_MINUTES` (5); config vars added.
+- `app/api/routes.py` `GET /api/trading` (auth-gated read-model: strategies, paper account, open/closed positions) + Mini App **📈 Trading** tab (PAPER-ONLY badge, balance, open positions, recent closed, armed strategies), placed after Opportunities per the "not Auto Trading first" rule.
 
 ### Remaining for 2G
-- Live scheduler wiring: evaluate portfolio symbols on a cadence, route confirmed plans through `PlanManager`, send Telegram paper alerts.
-- API endpoints + Mini App Strategy / Paper Trading tabs.
-- API endpoints + Mini App Strategy / Paper Trading tabs (next).
+- Live broker adapters are deliberately excluded: nothing in this phase can touch real funds (`execution` only ships the paper gateway).
+- Optional live-env authorization flow + AI interpretation layer (currently pure deterministic).
 
 ---
 
