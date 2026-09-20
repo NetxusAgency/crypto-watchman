@@ -96,6 +96,10 @@ class PaperGateway(ExecutionGateway):
         await session.flush()
         session.add(PaperFill(position_id=row.id, side="BUY" if fill.direction == "LONG" else "SELL", price=fill.entry_price, quantity=fill.quantity))
 
+    async def cancel(self, plan_id: str) -> ExecutionResult:
+        """Interface compliance: paper orders are cancelled by the monitor only."""
+        return ExecutionResult(ok=True, order_id=plan_id)
+
     async def mark_account(self, session, account: PaperAccount, prices: dict[str, float]) -> list[CloseEvent]:
         rows = await self._open_rows(session, account.id)
         state = self.engine.fresh_state()

@@ -27,7 +27,10 @@ from app.services.assistant.klines import kline_fetcher
 from app.services.wallet import wallet_service
 from app.services.opportunity import engine as opportunity_engine
 from app.services.opportunity import PRIORITY_ICONS, format_opportunity
+from app.services.trading.monitor import TradingMonitor
 from app.api import router as api_router
+
+trading_monitor = TradingMonitor()
 
 # Additive DB columns added after a table already exists (create_all cannot add
 # columns to an existing table). Each entry is applied idempotently at startup.
@@ -141,6 +144,24 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Opportunity background scan failed: {e}")
 
+    async def run_trading_scan():
+        try:
+            async with async_session_maker() as session:
+                result = await trading_monitor.scan_once(session, kline_fetcher)
+            if result["opened"]:
+                logger.info(f"Trading scan: {result['opened']} paper trade(s) opened.")
+        except Exception as e:
+            logger.warning(f"Trading background scan failed: {e}")
+
+    async def run_paper_mark():
+        try:
+            async with async_session_maker() as session:
+                closed = await trading_monitor.mark_all(session, price_fetcher)
+            if closed:
+                logger.info(f"Paper mark-to-market: {closed} close(s) recorded.")
+        except Exception as e:
+            logger.warning(f"Paper mark-to-market failed: {e}")
+
     async def notify_elevated_opportunities(elevated: list[dict]):
         from sqlalchemy import select
         from app.database.models import User, Notification
@@ -178,8 +199,10 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(run_whale_scan, "interval", minutes=settings.WHALE_SCAN_MINUTES)
     scheduler.add_job(run_wallet_refresh, "interval", minutes=settings.WALLET_REFRESH_MINUTES)
     scheduler.add_job(run_opportunity_scan, "interval", minutes=settings.OPPORTUNITY_SCAN_MINUTES)
+    scheduler.add_job(run_trading_scan, "interval", minutes=settings.TRADING_SCAN_MINUTES)
+    scheduler.add_job(run_paper_mark, "interval", minutes=settings.TRADING_MARK_MINUTES)
     scheduler.start()
-    logger.info("Started internal background scheduler (alerts 30s, listings 2m, digest daily at 09:00, news 10m, whales 5m, wallet 30m, opportunities 15m).")
+    logger.info("Started internal background scheduler (alerts 30s, listings 2m, digest daily at 09:00, news 10m, whales 5m, wallet 30m, opportunities 15m, trading 15m, paper mark 5m).")
 
     # 3. Start Telegram Bot Polling (supervised, auto-restarts on crash)
     async def run_polling_worker():

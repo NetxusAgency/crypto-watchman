@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     # Opportunity engine (Phase 2F)
     OPPORTUNITY_SCAN_MINUTES: int = Field(default=15, ge=5)
 
+    # Paper trading monitor (Phase 2G)
+    TRADING_SCAN_MINUTES: int = Field(default=15, ge=5)
+    TRADING_MARK_MINUTES: int = Field(default=5, ge=1)
+
     # Mini App (Phase 2E)
     PUBLIC_BASE_URL: str = Field(default="http://localhost:8000")
     # Mini App auth token lifetime (hours)

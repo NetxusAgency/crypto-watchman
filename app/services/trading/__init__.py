@@ -1,5 +1,6 @@
 from app.services.trading.indicators import calculate_stochastic, fibonacci_levels
 from app.services.trading.manager import PlanManager, ProposedTrade
+from app.services.trading.monitor import TradingMonitor, format_close_message, format_paper_card
 from app.services.trading.risk import RiskEngine
 from app.services.trading.strategy_engine import (
     MarketContext,
@@ -23,6 +24,9 @@ __all__ = [
     "fibonacci_levels",
     "PlanManager",
     "ProposedTrade",
+    "TradingMonitor",
+    "format_paper_card",
+    "format_close_message",
     "RiskEngine",
     "MarketContext",
     "RuleResult",
