@@ -50,9 +50,12 @@ class AuthPayload(BaseModel):
 @router.get("/meta")
 async def meta():
     """Public bootstrap data used by the Mini App frontend."""
+    token = settings.TELEGRAM_BOT_TOKEN or ""
+    bot_id = token.split(":")[0] if token and ":" in token and token != "placeholder_token" else ""
     return {
         "service": "watchman-mini-app",
         "bot_username": settings.TELEGRAM_BOT_USERNAME,
+        "bot_id": bot_id,
         "public_base_url": settings.PUBLIC_BASE_URL,
         "dev_auth_available": bool(settings.MINI_APP_DEV_TOKEN) and bool(settings.ADMIN_TELEGRAM_ID),
     }

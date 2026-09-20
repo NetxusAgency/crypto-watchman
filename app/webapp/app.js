@@ -74,6 +74,35 @@
     return new URLSearchParams(window.location.search).get("dev_token");
   }
 
+  function authFieldsFromQuery() {
+    const q = new URLSearchParams(window.location.search);
+    if (!(q.has("hash") && q.has("id") && q.has("auth_date"))) return null;
+    const fields = {};
+    ["id", "first_name", "last_name", "username", "photo_url", "auth_date", "hash"].forEach((k) => {
+      if (q.has(k)) fields[k] = q.get(k);
+    });
+    return fields;
+  }
+
+  async function tryLoginFromQuery() {
+    const fields = authFieldsFromQuery();
+    if (!fields) return false;
+    try {
+      showError("");
+      const data = await api("/api/auth", {
+        method: "POST",
+        body: JSON.stringify({ widget: fields }),
+      });
+      setToken(data);
+      history.replaceState({}, "", window.location.pathname);
+      return true;
+    } catch (e) {
+      history.replaceState({}, "", window.location.pathname);
+      renderEmptyState("Login failed: " + e.message);
+      return false;
+    }
+  }
+
   async function authenticate() {
     if (token) return true;
     const body = {};
@@ -109,12 +138,24 @@
     login.classList.remove("hidden");
     try {
       const meta = await api("/api/meta");
+      const holder = $("#tg-login-widget");
       if (!meta.bot_username) {
-        const holder = $("#tg-login-widget");
         if (holder) {
           holder.innerHTML =
             '<div class="sub">Sign-in with Telegram is not configured for this deployment yet.</div>';
         }
+        return false;
+      }
+      if (meta.bot_id && holder && !document.querySelector("#tg-login-widget .redirect-login")) {
+        const a = document.createElement("a");
+        a.href =
+          "https://oauth.telegram.org/auth?bot_id=" + meta.bot_id +
+          "&origin=" + encodeURIComponent(location.origin) +
+          "&request_access=write&lang=en&return_to=" +
+          encodeURIComponent(location.origin + location.pathname);
+        a.className = "redirect-login";
+        a.textContent = "or continue with the browser redirect login →";
+        holder.appendChild(document.createElement("div")).appendChild(a);
       }
     } catch (e) {}
     return false;
@@ -294,6 +335,13 @@
   async function load() {
     try {
       showError("");
+      const fromQuery = await tryLoginFromQuery();
+      if (fromQuery) {
+        state = await api("/api/dashboard");
+        $("#planTag").style.display = "";
+        renderAll();
+        return;
+      }
       const ok = await authenticate();
       if (!ok) return;
       state = await api("/api/dashboard");

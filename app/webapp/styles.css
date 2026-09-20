@@ -135,6 +135,14 @@ body {
 .pill.MIXED { background: rgba(245,181,66,.2); color: var(--yellow); }
 
 .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.redirect-login {
+  display: inline-block;
+  margin-top: 10px;
+  color: var(--accent);
+  font-size: 13px;
+  text-decoration: none;
+}
+.redirect-login:hover { text-decoration: underline; }
 .desc { color: var(--text); font-size: 14px; margin-top: 4px; }
 .line-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 

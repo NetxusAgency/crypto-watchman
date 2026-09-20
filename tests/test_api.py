@@ -191,6 +191,26 @@ class TestSerializers:
         assert out["alert_type"] == "price_above"
 
 
+class TestMeta:
+    def test_meta_exposes_bot_id(self, monkeypatch):
+        monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "8662411684:REALTOKEN")
+        monkeypatch.setattr(settings, "TELEGRAM_BOT_USERNAME", "Alpguard_bot")
+        from starlette.testclient import TestClient
+        from app.main import app
+        resp = TestClient(app).get("/api/meta")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["bot_id"] == "8662411684"
+        assert data["bot_username"] == "Alpguard_bot"
+
+    def test_meta_placeholder_token_no_bot_id(self, monkeypatch):
+        monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "placeholder_token")
+        from starlette.testclient import TestClient
+        from app.main import app
+        resp = TestClient(app).get("/api/meta")
+        assert resp.json()["bot_id"] == ""
+
+
 class TestMiniAppPage:
     def test_index_renders_widget_with_username(self, monkeypatch):
         monkeypatch.setattr(settings, "TELEGRAM_BOT_USERNAME", "@testbot")
