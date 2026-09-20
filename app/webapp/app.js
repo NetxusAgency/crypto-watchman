@@ -75,27 +75,71 @@
   }
 
   async function authenticate() {
-    if (token) return;
+    if (token) return true;
     const body = {};
     if (TELEGRAM && TELEGRAM.initData) {
       body.init_data = TELEGRAM.initData;
     } else if (devTokenFromUrl()) {
       body.dev_token = devTokenFromUrl();
     } else {
-      throw new Error(
-        "Open this page from a Telegram chat to use the Mini App" +
-        (window.location.pathname === "/app/" ? "" : "")
-      );
+      return await showTelegramLogin();
     }
     const data = await api("/api/auth", {
       method: "POST",
       body: JSON.stringify(body),
     });
+    setToken(data);
+    return true;
+  }
+
+  function setToken(data) {
     token = data.token;
     const plan = document.querySelector("#planTag");
     plan.textContent = data.user.plan.toUpperCase();
     plan.classList.add("accent");
+    const login = $("#loginPanel");
+    if (login) login.classList.add("hidden");
   }
+
+  async function showTelegramLogin() {
+    showError("");
+    renderEmptyState("Sign in with Telegram to continue.");
+    const login = $("#loginPanel");
+    if (!login) return false;
+    login.classList.remove("hidden");
+    let meta = {};
+    try {
+      meta = await api("/api/meta");
+    } catch (e) {}
+    const holder = $("#tg-login-widget");
+    if (meta.bot_username && holder && !holder.childElementCount) {
+      const s = document.createElement("script");
+      s.async = true;
+      s.src = "https://telegram.org/js/telegram-login.js";
+      s.setAttribute("data-telegram-login", meta.bot_username);
+      s.setAttribute("data-size", "large");
+      s.setAttribute("data-onauth", "onTelegramAuth(user)");
+      s.setAttribute("data-request-access", "write");
+      holder.appendChild(s);
+    }
+    return false;
+  }
+
+  /* called by the Telegram Login Widget after the user approves */
+  window.onTelegramAuth = async (user) => {
+    try {
+      showError("");
+      const data = await api("/api/auth", {
+        method: "POST",
+        body: JSON.stringify({ widget: user }),
+      });
+      setToken(data);
+      state = await api("/api/dashboard");
+      renderAll();
+    } catch (e) {
+      renderEmptyState(e.message);
+    }
+  };
 
   function renderPortfolio() {
     const panel = $("#portfolioPanel .card-body");
@@ -255,7 +299,8 @@
   async function load() {
     try {
       showError("");
-      await authenticate();
+      const ok = await authenticate();
+      if (!ok) return;
       state = await api("/api/dashboard");
       $("#planTag").style.display = "";
       renderAll();

@@ -43,12 +43,25 @@ async def require_telegram_id(
 
 class AuthPayload(BaseModel):
     init_data: str = ""
+    widget: dict | None = None
     dev_token: str = ""
+
+
+@router.get("/meta")
+async def meta():
+    """Public bootstrap data used by the Mini App frontend."""
+    return {
+        "service": "watchman-mini-app",
+        "bot_username": settings.TELEGRAM_BOT_USERNAME,
+        "public_base_url": settings.PUBLIC_BASE_URL,
+        "dev_auth_available": bool(settings.MINI_APP_DEV_TOKEN) and bool(settings.ADMIN_TELEGRAM_ID),
+    }
 
 
 @router.post("/auth")
 async def auth(payload: AuthPayload):
-    """Exchange Telegram WebApp initData (or a dev token) for a signed app token."""
+    """Exchange Telegram WebApp initData, a Login Widget payload, or a dev token
+    for a signed app token."""
     telegram_id = None
     username = None
 
@@ -60,6 +73,14 @@ async def auth(payload: AuthPayload):
             user_info = data["user"]
             telegram_id = int(user_info["id"])
             username = user_info.get("username")
+
+    if telegram_id is None and payload.widget:
+        widget_user = security.validate_widget_fields(
+            payload.widget, settings.TELEGRAM_BOT_TOKEN
+        )
+        if widget_user:
+            telegram_id = widget_user["id"]
+            username = widget_user.get("username")
 
     if telegram_id is None:
         if settings.ADMIN_TELEGRAM_ID and security.is_valid_dev_token(payload.dev_token):

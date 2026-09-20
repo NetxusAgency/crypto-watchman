@@ -11,6 +11,8 @@ class Settings(BaseSettings):
 
     # Bot settings
     TELEGRAM_BOT_TOKEN: str = Field(default="placeholder_token")
+    # Bot username (used for the browser "Sign in with Telegram" widget)
+    TELEGRAM_BOT_USERNAME: str = ""
 
     # DB settings
     DATABASE_URL: str = Field(default="postgresql+asyncpg://postgres:postgres@localhost:5432/crypto_watchman")

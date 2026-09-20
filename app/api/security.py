@@ -27,6 +27,17 @@ def _webapp_secret_key(bot_token: str) -> bytes:
     return _hmac_sha256(b"WebAppData", bot_token.encode())
 
 
+def _signature_ok(params: dict, bot_token: str, provided_hash: str) -> bool:
+    """HMAC check over the sorted `k=v` pairs (shared by initData and widget)."""
+    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(params.items()))
+    expected = _hmac_sha256(_webapp_secret_key(bot_token), data_check_string.encode()).hex()
+    return hmac.compare_digest(expected, provided_hash)
+
+
+def _fresh(auth_date: int) -> bool:
+    return abs(time.time() - auth_date) <= _INIT_DATA_TTL_SECONDS
+
+
 def validate_init_data(init_data: str, bot_token: str) -> dict | None:
     """Validate a Telegram WebApp initData string.
 
@@ -41,21 +52,14 @@ def validate_init_data(init_data: str, bot_token: str) -> dict | None:
         return None
 
     provided_hash = params.pop("hash", None)
-    if not provided_hash:
-        return None
-
-    data_check_string = "\n".join(
-        f"{k}={v}" for k, v in sorted(params.items())
-    )
-    expected = _hmac_sha256(_webapp_secret_key(bot_token), data_check_string.encode()).hex()
-    if not hmac.compare_digest(expected, provided_hash):
+    if not provided_hash or not _signature_ok(params, bot_token, provided_hash):
         return None
 
     try:
         auth_date = int(params.get("auth_date", "0"))
     except ValueError:
         return None
-    if abs(time.time() - auth_date) > _INIT_DATA_TTL_SECONDS:
+    if not _fresh(auth_date):
         return None
 
     try:
@@ -66,6 +70,44 @@ def validate_init_data(init_data: str, bot_token: str) -> dict | None:
         return None
 
     return {"user": user, "auth_date": auth_date}
+
+
+def validate_widget_fields(fields: dict | None, bot_token: str) -> dict | None:
+    """Validate a Telegram Login Widget auth payload (flat `k=v` fields).
+
+    The widget signs the same fields with the same HMAC scheme as initData,
+    so the same secret key verification applies.
+    """
+    if not fields or not bot_token or bot_token == "placeholder_token":
+        return None
+    try:
+        params = {str(k): str(v) for k, v in fields.items()}
+    except Exception:
+        return None
+
+    provided_hash = params.pop("hash", None)
+    if not provided_hash or not _signature_ok(params, bot_token, provided_hash):
+        return None
+
+    try:
+        auth_date = int(params.get("auth_date", "0"))
+    except (ValueError, TypeError):
+        return None
+    if not _fresh(auth_date):
+        return None
+
+    try:
+        user_id = int(params.get("id", ""))
+    except (ValueError, TypeError):
+        return None
+    if not user_id:
+        return None
+
+    return {
+        "id": user_id,
+        "first_name": params.get("first_name"),
+        "username": params.get("username"),
+    }
 
 
 def is_valid_dev_token(token: str | None) -> bool:

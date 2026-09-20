@@ -71,6 +71,49 @@ class TestInitData:
         )
 
 
+def _build_widget(bot_token=BOT_TOKEN, user_id=VALID_USER_ID, username="tester"):
+    """Build a Telegram Login Widget auth payload (flat fields) with a valid signature."""
+    fields = {
+        "id": str(user_id),
+        "first_name": "Test",
+        "username": username,
+        "auth_date": str(int(real_time.time())),
+    }
+    data_check_string = "\n".join(
+        f"{k}={v}" for k, v in sorted(fields.items())
+    )
+    secret = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
+    fields["hash"] = hmac.new(secret, data_check_string.encode(), hashlib.sha256).hexdigest()
+    return fields
+
+
+class TestLoginWidget:
+    def test_valid_widget(self):
+        out = security.validate_widget_fields(_build_widget(), BOT_TOKEN)
+        assert out is not None
+        assert out["id"] == VALID_USER_ID
+        assert out["username"] == "tester"
+
+    def test_tampered_rejected(self):
+        fields = _build_widget()
+        fields["username"] = "evil"
+        assert security.validate_widget_fields(fields, BOT_TOKEN) is None
+
+    def test_expired_rejected(self):
+        fields = _build_widget()
+        fields["auth_date"] = str(int(real_time.time()) - 3 * 86400)
+        assert security.validate_widget_fields(fields, BOT_TOKEN) is None
+
+    def test_missing_id_rejected(self):
+        fields = _build_widget()
+        del fields["id"]
+        assert security.validate_widget_fields(fields, BOT_TOKEN) is None
+
+    def test_none_rejected(self):
+        assert security.validate_widget_fields(None, BOT_TOKEN) is None
+        assert security.validate_widget_fields({}, BOT_TOKEN) is None
+
+
 class TestDevToken:
     def test_valid_accepts(self, monkeypatch):
         monkeypatch.setattr(settings, "MINI_APP_DEV_TOKEN", "supersecret")
