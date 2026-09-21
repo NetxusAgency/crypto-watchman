@@ -35,6 +35,8 @@ _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("whale_transactions", "direction", "VARCHAR(10)"),
     ("whale_transactions", "direction_confidence", "VARCHAR(10)"),
     ("broker_connections", "mode", "VARCHAR(10)"),
+    ("broker_connections", "refresh_token_enc", "TEXT"),
+    ("broker_connections", "token_expires_at", "TIMESTAMP"),
 ]
 
 
@@ -236,6 +238,26 @@ async def lifespan(app: FastAPI):
                         logger.error(f"Failed to send opportunity alert to User {user.id}: {e}")
                 await session.commit()
 
+    async def run_token_refresh():
+        """Keep cTID OAuth access tokens fresh before they expire (lazy checks
+        in live.py cover individual broker calls; this sweep catches idle ones)."""
+        try:
+            from app.services import db_service
+            from app.services.trading.ctid_oauth import ensure_valid_token
+
+            async with async_session_maker() as session:
+                rows = await db_service.all_broker_connections(session)
+                for connection in rows:
+                    try:
+                        await ensure_valid_token(session, connection)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(
+                            f"Token refresh failed for connection {connection.id}: {e}"
+                        )
+                await session.commit()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Token refresh sweep failed: {e}")
+
     scheduler.add_job(run_alert_check, "interval", seconds=30)
     scheduler.add_job(run_listing_check, "interval", minutes=2)
     scheduler.add_job(run_daily_digest, "cron", hour=9, minute=0)
@@ -245,8 +267,9 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(run_wallet_refresh, "interval", minutes=settings.WALLET_REFRESH_MINUTES)
     scheduler.add_job(run_opportunity_scan, "interval", minutes=settings.OPPORTUNITY_SCAN_MINUTES)
     scheduler.add_job(run_live_scan, "interval", minutes=settings.TRADING_SCAN_MINUTES)
+    scheduler.add_job(run_token_refresh, "interval", minutes=settings.CTRADER_TOKEN_REFRESH_MINUTES)
     scheduler.start()
-    logger.info("Started internal background scheduler (alerts 30s, listings 2m, digest daily at 09:00, news 10m, whales 5m, wallet 30m, opportunities 15m, live trading 15m).")
+    logger.info("Started internal background scheduler (alerts 30s, listings 2m, digest daily at 09:00, news 10m, whales 5m, wallet 30m, opportunities 15m, live trading 15m, cTID token refresh 30m).")
 
     # 3. Start Telegram Bot Polling (supervised, auto-restarts on crash)
     async def run_polling_worker():

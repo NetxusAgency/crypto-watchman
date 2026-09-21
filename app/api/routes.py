@@ -73,6 +73,15 @@ class LiveExecutePayload(BaseModel):
     dry_run: bool = True
 
 
+class OAuthStartPayload(BaseModel):
+    # The Open API application credentials from id.ctrader.com. Never echoed
+    # back to the client after the authorize URL is built.
+    client_id: str
+    client_secret: str
+    mode: str = "demo"
+    label: str = ""
+
+
 def _scalar_masked_connection(c) -> dict:
     from app.services.broker import mask_secret
 
@@ -87,6 +96,10 @@ def _scalar_masked_connection(c) -> dict:
         "live_enabled_global": bool(settings.LIVE_TRADING_ENABLED),
         "has_token": bool(c.access_token_enc),
         "access_token_masked": mask_secret(c.access_token_enc),
+        "has_refresh_token": bool(getattr(c, "refresh_token_enc", "")),
+        "token_expires_at": (
+            c.token_expires_at.isoformat() if getattr(c, "token_expires_at", None) else None
+        ),
         "created_at": c.created_at.isoformat() if c.created_at else None,
     }
 
@@ -530,6 +543,134 @@ async def delete_trading_connection(
     if not ok:
         raise HTTPException(status_code=404, detail="Broker connection not found")
     return {"ok": True, "connection_id": connection_id}
+
+
+@router.post("/trading/live/ctid/start")
+async def start_ctid_authorization(
+    payload: OAuthStartPayload,
+    session: AsyncSession = Depends(get_session),
+    telegram_id: int = Depends(require_telegram_id),
+):
+    """Start a cTrader Open API (cTID) OAuth authorization.
+
+    The Mini App sends its Open API application Client ID/Secret + the chosen
+    account mode; we build the cTrader authorize URL (with a one-time state) and
+    hand it back so the browser can do the grant. Client/secret are never
+    returned; the callback stores them encrypted on the new BrokerConnection.
+    """
+    from app.services.trading.ctid_oauth import CTraderOAuthError, start_authorization
+
+    if not payload.client_id or not payload.client_secret:
+        raise HTTPException(
+            status_code=400,
+            detail="Open API Client ID and Client Secret are required. Create an "
+                   "application at id.ctrader.com -> Open API first.",
+        )
+    try:
+        authorize_url = start_authorization(
+            telegram_id=telegram_id,
+            client_id=payload.client_id.strip(),
+            mode=(payload.mode or "demo").lower(),
+            label=payload.label.strip(),
+        )
+    except CTraderOAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "authorize_url": authorize_url,
+        "redirect_uri": settings.CTRADER_OAUTH_REDIRECT_URI,
+    }
+
+
+@router.get("/trading/live/ctid/callback")
+async def ctid_oauth_callback(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+):
+    """OAuth redirect target hit by the browser after the user grants access.
+
+    Exchanges the `code` for tokens, discovers the account id, saves an encrypted
+    BrokerConnection row, then bounces the browser back to the Mini App with a
+    `?ctid=ok` (or `?ctid=error`) so app.js can refresh.
+    """
+    from app.services.trading.ctid_oauth import (
+        CTraderOAuthError,
+        consume_pending_state,
+        exchange_code,
+    )
+    from app.services.broker import decrypt_secret, encrypt_secret
+    from app.execution.ctrader import CTraderClient
+
+    params = dict(request.query_params)
+    redirect_base = settings.PUBLIC_BASE_URL.rstrip("/")
+    if params.get("error"):
+        return RedirectResponse(f"{redirect_base}/app?ctid=error", status_code=302)
+
+    state = params.get("state", "")
+    code = params.get("code", "")
+    try:
+        pending = consume_pending_state(state)
+        client_id = decrypt_secret(pending.client_id_enc)
+        client_secret = decrypt_secret(pending.client_secret_enc)
+        if not client_id or not client_secret:
+            raise CTraderOAuthError("Missing application credentials in pending state.")
+    except CTraderOAuthError as exc:
+        return RedirectResponse(f"{redirect_base}/app?ctid=error&reason={exc}", status_code=302)
+
+    try:
+        body = await exchange_code(
+            code=code,
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+        access_token = body.get("access_token", "")
+        refresh_token = body.get("refresh_token", "")
+        expires_at = _oauth_expires_at(body)
+    except CTraderOAuthError as exc:
+        logger.warning("cTID code exchange failed: %s", exc)
+        return RedirectResponse(f"{redirect_base}/app?ctid=error&reason=exchange-failed", status_code=302)
+
+    client = CTraderClient()
+    account_id = ""
+    try:
+        accounts = await client.get_accounts(access_token)
+        if accounts:
+            account_id = str(accounts[0].account_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("cTID callback: could not read accounts: %s", exc)
+
+    user = await db_service.get_or_create_user(session, telegram_id=pending.telegram_id)
+    connection = await db_service.save_broker_connection(
+        session,
+        user.id,
+        label=pending.label or f"cTrader {account_id or 'account'}",
+        platform="ctrader",
+        account_id=account_id or f"ctid-{pending.telegram_id}-{state[:8]}",
+        access_token_enc=encrypt_secret(access_token),
+        refresh_token_enc=encrypt_secret(refresh_token) if refresh_token else "",
+        client_id_enc=encrypt_secret(client_id),
+        client_secret_enc=encrypt_secret(client_secret),
+        token_expires_at=expires_at,
+        is_live=False,
+        mode=pending.mode,
+    )
+    # Refresh lazily the first time if we could not parse the expiry.
+    logger.info(
+        "cTID OAuth connected account %s (mode=%s) for user %s",
+        account_id or "unknown", pending.mode, pending.telegram_id,
+    )
+    return RedirectResponse(f"{redirect_base}/app?ctid=ok", status_code=302)
+
+
+def _oauth_expires_at(body: dict):
+    from app.services.trading.ctid_oauth import expires_in_to_utc
+
+    expires_in = body.get("expires_in")
+    if expires_in is None:
+        expires_in = 3600  # conservative default when the grant omits it
+    try:
+        return expires_in_to_utc(expires_in)
+    except (TypeError, ValueError):
+        return None
 
 
 @router.post("/trading/live/execute")

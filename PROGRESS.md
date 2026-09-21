@@ -351,3 +351,31 @@ accounts, and **no order is ever placed without an explicit Telegram ✅ from th
   guards). Full suite: **196 passed in ~30s**; `node --check` clean.
 - Committing + pushing this slice to github.com/NetxusAgency/crypto-watchman.git (see latest commit).
 
+## 2H.2 - cTrader OAuth (Connect with cTID) ✅
+
+Removes the manual copy-paste of an expiring access token: the Mini App now runs the real cTrader Open API
+OAuth flow, stores the token pair encrypted, and auto-renews before expiry.
+
+### What changed
+- `app/services/trading/ctid_oauth.py` (new): authorize-URL builder, one-time `state` store (Client ID/Secret kept
+  Fernet-encrypted on the pending entry), code→token exchange, refresh-token renewal, UTC-wall-clock expiry
+  checks (timezone-safe), `ensure_valid_token` for lazy pre-broker refreshes.
+- `app/api/routes.py`: `POST /trading/live/ctid/start` (returns the cTrader authorize URL) and
+  `GET /trading/live/ctid/callback` (state check → exchange → discover account → save encrypted connection →
+  bounce back to the Mini App with `?ctid=ok`). Redirects force 302 like the existing auth flow.
+- `BrokerConnection` gains `refresh_token_enc` + `token_expires_at` (added idempotently via `_ADDITIVE_COLUMNS`);
+  `db_service.update_broker_tokens` + `all_broker_connections`; overview masks include refresh/expiry presence.
+- `live.py`: `_build_proposal`, `confirm_trade` and `sync_closed` call `ensure_valid_token` before any broker
+  call; propose/confirm/reject/sync now commit explicitly so rows + refreshed tokens persist.
+- `main.py`: background `run_token_refresh` sweep (CTRADER_TOKEN_REFRESH_MINUTES, default 30m) refreshes idle
+  connections.
+- Mini App: "Connect with cTID (OAuth)" button + mode/label inputs; `startCtidOAuth()` redirects the browser;
+  `handleCtidReturn()` surfaces `ctid=ok`/`ctid=error` after the round-trip.
+- Config: `CTRADER_OAUTH_AUTHORIZE_URL`/`TOKEN_URL`/`REDIRECT_URI` defaults for id.ctrader.com.
+
+### Status
+- New `tests/test_ctid_oauth.py` (24 tests): authorize-URL pieces, state one-time/expiry, code exchange, refresh,
+  expiry logic, lazy refresh with/without credentials, end-to-end start/callback via TestClient (incl. secret
+  encryption round-trip). Full suite: **220 passed in ~34s**; `node --check` clean.
+- Committing + pushing this slice to github.com/NetxusAgency/crypto-watchman.git (see latest commit).
+

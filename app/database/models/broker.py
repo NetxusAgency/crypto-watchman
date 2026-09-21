@@ -19,8 +19,13 @@ class BrokerConnection(Base):
     label: Mapped[str] = mapped_column(String(100), default="cTrader account")
     account_id: Mapped[str] = mapped_column(String(40), index=True)
     access_token_enc: Mapped[str] = mapped_column(Text, default="")
+    refresh_token_enc: Mapped[str] = mapped_column(Text, default="")
     client_id_enc: Mapped[str] = mapped_column(Text, default="")
     client_secret_enc: Mapped[str] = mapped_column(Text, default="")
+    # UTC timestamp when access_token_enc stops working. Tokens are renewed in
+    # the background (CTRADER_TOKEN_REFRESH_MINUTES) and lazily before any
+    # broker call via refresh_token_enc; a null value means "unknown, try it".
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Account type: "demo" (simulated funds on the real platform) or "live".
     # Demo accounts may be armed without the global kill-switch; live ones
     # additionally require settings.LIVE_TRADING_ENABLED.

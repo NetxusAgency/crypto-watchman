@@ -80,6 +80,18 @@ class Settings(BaseSettings):
     # cTrader Connect API v2 base URL.
     CTRADER_API_BASE_URL: str = Field(default="https://connect.ctrader.com/api/v2")
 
+    # cTrader Open API OAuth (cTID). Client ID/Secret come from an Open API
+    # application created at id.ctrader.com -> Open API -> Your applications.
+    # The browser authorize step and the token exchange use these URLs; the
+    # redirect URI must exactly match the one registered on the application.
+    CTRADER_OAUTH_AUTHORIZE_URL: str = Field(default="https://id.ctrader.com/oauth/authorize")
+    CTRADER_OAUTH_TOKEN_URL: str = Field(default="https://id.ctrader.com/oauth/token")
+    CTRADER_OAUTH_REDIRECT_URI: str = Field(
+        default="http://localhost:8000/api/trading/live/ctid/callback"
+    )
+    # How often the background sweep refreshes near-expiry cTID access tokens.
+    CTRADER_TOKEN_REFRESH_MINUTES: int = Field(default=30, ge=5)
+
     # Mini App (Phase 2E)
     PUBLIC_BASE_URL: str = Field(default="http://localhost:8000")
     # Mini App auth token lifetime (hours)

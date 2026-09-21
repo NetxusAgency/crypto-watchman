@@ -472,14 +472,16 @@
       '<h4 class="section-h">Connect a cTrader account</h4>' +
       `<div class="live-form">
         <input id="liveLabel" class="inp" placeholder="Label (e.g. My cTrader account)" value="My cTrader account" />
-        <input id="liveAccount" class="inp" placeholder="Account ID" />
-        <input id="liveToken" class="inp" type="password" placeholder="Access token" />
-        <input id="liveClientId" class="inp" type="password" placeholder="Client ID (optional)" />
-        <input id="liveClientSecret" class="inp" type="password" placeholder="Client secret (optional)" />
         <select id="liveMode" class="inp">
           <option value="demo">🧪 Demo account (simulated funds)</option>
           <option value="live">💵 Live account (real money)</option>
         </select>
+        <button id="liveOAuthBtn" class="btn btn-primary">Connect with cTID (OAuth)</button>
+        <div class="sub" style="margin-top:6px">Opens cTrader authorization in a new tab. Needs an Open API application (id.ctrader.com → Open API).</div>
+        <input id="liveAccount" class="inp" placeholder="Account ID (manual)" />
+        <input id="liveToken" class="inp" type="password" placeholder="Access token (manual)" />
+        <input id="liveClientId" class="inp" type="password" placeholder="Client ID (manual, optional)" />
+        <input id="liveClientSecret" class="inp" type="password" placeholder="Client secret (manual, optional)" />
         <button id="liveSaveBtn" class="btn">Save connection (encrypted)</button>
         <div class="sub" style="margin-top:6px">One open trade per account — a new trade waits until the last one is fulfilled.</div>
       </div>` +
@@ -497,6 +499,8 @@
 
     $("#liveSaveBtn") &&
       $("#liveSaveBtn").addEventListener("click", () => saveLiveConnection());
+    $("#liveOAuthBtn") &&
+      $("#liveOAuthBtn").addEventListener("click", () => startCtidOAuth());
     $("#liveDryRun") &&
       $("#liveDryRun").addEventListener("click", () => runLiveTrade(true));
     const go = $("#liveGo");
@@ -504,6 +508,45 @@
     panel.querySelectorAll("[data-arm]").forEach((b) =>
       b.addEventListener("click", () => armLiveConnection(b.dataset.arm))
     );
+  }
+
+  async function startCtidOAuth() {
+    const v = (id) => (document.getElementById(id) || {}).value || "";
+    const label = v("liveLabel");
+    const mode = v("liveMode") || "demo";
+    try {
+      const res = await api("/api/trading/live/ctid/start", {
+        method: "POST",
+        body: JSON.stringify({
+          client_id: v("liveClientId"),
+          client_secret: v("liveClientSecret"),
+          mode,
+          label,
+        }),
+      });
+      if (res && res.authorize_url) {
+        window.location.href = res.authorize_url;
+      } else {
+        showError(res.detail ? String(res.detail) : "Could not start authorization.");
+      }
+    } catch (e) {
+      showError(e.message);
+    }
+  }
+
+  function handleCtidReturn() {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("ctid");
+    if (!code) return;
+    if (code === "ok") {
+      showError("cTrader account connected. Toggle Arm for trading to begin.");
+    } else {
+      showError("cTrader authorization did not complete — try again.");
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.delete("ctid");
+    url.searchParams.delete("reason");
+    window.history.replaceState({}, "", url.toString());
   }
 
   async function saveLiveConnection() {
@@ -581,6 +624,7 @@
   async function load() {
     try {
       showError("");
+      handleCtidReturn();
       if (await tokenFromFragment()) {
         await loadState();
         return;

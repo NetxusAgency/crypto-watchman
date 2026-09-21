@@ -182,6 +182,15 @@ class LiveExecutionService:
         if not guard.allowed:
             return guard, None
 
+        from app.services.trading.ctid_oauth import ensure_valid_token
+
+        if not await ensure_valid_token(session, connection):
+            return LiveExecutionResult(
+                allowed=False,
+                reason="Your cTrader access token has expired. Reconnect the account "
+                       "(Trading tab -> Connect with cTID) to obtain a fresh one.",
+            ), None
+
         symbol_alias = CANDLE_PROXY.get(symbol.upper(), symbol.upper())
         access_token = decrypt_secret(connection.access_token_enc)
 
@@ -373,6 +382,7 @@ class LiveExecutionService:
             f"Live proposal {trade.plan_id} {symbol} {plan.direction} qty={quantity} "
             f"[dry_run={dry_run}] status={status}"
         )
+        await session.commit()
         return LiveExecutionResult(
             allowed=True,
             reason=reason_txt or f"Order placed with cTrader (id {order_id}).",
@@ -443,6 +453,16 @@ class LiveExecutionService:
                 trade=trade,
             )
 
+        from app.services.trading.ctid_oauth import ensure_valid_token
+
+        if connection is not None and not await ensure_valid_token(session, connection):
+            return LiveExecutionResult(
+                allowed=False,
+                reason="Your cTrader access token expired — reconnect the account "
+                       "(Trading tab -> Connect with cTID) and confirm again.",
+                trade=trade,
+            )
+
         access_token = decrypt_secret(connection.access_token_enc)
         positions = await self.client.get_positions(access_token)
         if positions:
@@ -486,6 +506,7 @@ class LiveExecutionService:
         trade.order_id = order_id
         trade.reason = f"Order placed with cTrader (id {order_id})."
         await session.flush()
+        await session.commit()
         logger.info(f"Confirmed live trade {trade.plan_id} {trade.symbol} order={order_id}")
         return LiveExecutionResult(
             allowed=True,
@@ -506,6 +527,7 @@ class LiveExecutionService:
         trade.status = "REJECTED"
         trade.reason = "Declined by the user."
         await session.flush()
+        await session.commit()
         logger.info(f"Rejected live trade {trade.plan_id}")
         return LiveExecutionResult(allowed=True, reason="Trade declined — nothing placed.", trade=trade)
 
@@ -515,6 +537,13 @@ class LiveExecutionService:
         Returns the number of trades newly closed. Keeps the no-duplicate rule
         honest when a position is fulfilled outside the DB.
         """
+        from app.services.trading.ctid_oauth import ensure_valid_token
+
+        if not await ensure_valid_token(session, connection):
+            logger.warning(
+                "sync_closed: token expired for connection %s - skipping", connection.id
+            )
+            return 0
         access_token = decrypt_secret(connection.access_token_enc)
         try:
             positions = await self.client.get_positions(access_token)
@@ -539,5 +568,6 @@ class LiveExecutionService:
             closed += 1
         if closed:
             await session.flush()
+            await session.commit()
             logger.info(f"sync_closed: {closed} live trade(s) marked CLOSED for connection {connection.id}")
         return closed

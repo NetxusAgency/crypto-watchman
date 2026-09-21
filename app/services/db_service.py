@@ -169,8 +169,10 @@ async def save_broker_connection(
     platform: str = "ctrader",
     account_id: str = "",
     access_token_enc: str = "",
+    refresh_token_enc: str = "",
     client_id_enc: str = "",
     client_secret_enc: str = "",
+    token_expires_at: datetime | None = None,
     is_live: bool = False,
     mode: str = "demo",
 ) -> BrokerConnection:
@@ -199,10 +201,14 @@ async def save_broker_connection(
         connection.account_id = account_id
     if access_token_enc:
         connection.access_token_enc = access_token_enc
+    if refresh_token_enc:
+        connection.refresh_token_enc = refresh_token_enc
     if client_id_enc:
         connection.client_id_enc = client_id_enc
     if client_secret_enc:
         connection.client_secret_enc = client_secret_enc
+    if token_expires_at is not None:
+        connection.token_expires_at = token_expires_at
     if mode and mode != (getattr(connection, "mode", None) or "demo"):
         connection.mode = mode
     if is_live != connection.is_live:
@@ -210,6 +216,37 @@ async def save_broker_connection(
     await session.commit()
     await session.refresh(connection)
     return connection
+
+
+async def update_broker_tokens(
+    session: AsyncSession,
+    user_id: int,
+    connection_id: int,
+    *,
+    access_token_enc: str = "",
+    refresh_token_enc: str = "",
+    expires_at: datetime | None = None,
+) -> bool:
+    """Update the OAuth token pair on a saved connection. Returns False if not found."""
+    connection = await get_broker_connection(session, user_id, connection_id)
+    if not connection:
+        return False
+    if access_token_enc:
+        connection.access_token_enc = access_token_enc
+    if refresh_token_enc:
+        connection.refresh_token_enc = refresh_token_enc
+    if expires_at is not None:
+        connection.token_expires_at = expires_at
+    await session.commit()
+    await session.refresh(connection)
+    return True
+
+
+async def all_broker_connections(session: AsyncSession) -> list[BrokerConnection]:
+    """Every saved connection across users (used by the token-refresh sweep)."""
+    stmt = select(BrokerConnection).order_by(BrokerConnection.created_at.desc())
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
 
 
 async def set_broker_connection_live(session: AsyncSession, user_id: int, connection_id: int, is_live: bool) -> bool:
