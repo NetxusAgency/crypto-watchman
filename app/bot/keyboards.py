@@ -235,6 +235,15 @@ def assistant_strategy_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def live_confirm_keyboard(trade_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Confirm", callback_data=f"liveexec:{trade_id}:confirm")],
+            [InlineKeyboardButton(text="❌ Reject", callback_data=f"liveexec:{trade_id}:reject")],
+        ]
+    )
+
+
 def assistant_manage_keyboard(strategies: list) -> InlineKeyboardMarkup:
     rows = []
     for s in (strategies or [])[:12]:

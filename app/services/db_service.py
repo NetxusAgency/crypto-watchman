@@ -172,6 +172,7 @@ async def save_broker_connection(
     client_id_enc: str = "",
     client_secret_enc: str = "",
     is_live: bool = False,
+    mode: str = "demo",
 ) -> BrokerConnection:
     """Create or update a broker connection; secrets arrive already encrypted."""
     connection = None
@@ -202,6 +203,8 @@ async def save_broker_connection(
         connection.client_id_enc = client_id_enc
     if client_secret_enc:
         connection.client_secret_enc = client_secret_enc
+    if mode and mode != (getattr(connection, "mode", None) or "demo"):
+        connection.mode = mode
     if is_live != connection.is_live:
         connection.is_live = is_live
     await session.commit()

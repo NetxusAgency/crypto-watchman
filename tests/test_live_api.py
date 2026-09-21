@@ -1,4 +1,4 @@
-﻿"""Tests for the Phase 2H live-execution wiring (broker connections + dry-run pipeline)."""
+﻿"""Tests for the live-execution wiring (broker connections + propose/confirm flow)."""
 
 from types import SimpleNamespace
 
@@ -24,7 +24,7 @@ class TestBrokerEncryption:
         assert mask_secret("") == ""
 
 
-def _fake_connection(account_id="10012345", is_live=False, is_active=True):
+def _fake_connection(account_id="10012345", is_live=False, is_active=True, mode="demo"):
     return SimpleNamespace(
         id=1,
         user_id=7,
@@ -33,6 +33,7 @@ def _fake_connection(account_id="10012345", is_live=False, is_active=True):
         account_id=account_id,
         is_live=is_live,
         is_active=is_active,
+        mode=mode,
         access_token_enc=encrypt_secret("tok"),
         client_id_enc="",
         client_secret_enc="",
@@ -117,6 +118,7 @@ class TestConnections:
                 account_id=kw.get("account_id", ""),
                 is_live=kw.get("is_live", False),
                 is_active=True,
+                mode=kw.get("mode", "demo"),
                 access_token_enc=kw.get("access_token_enc", "enc:abc"),
                 client_id_enc=kw.get("client_id_enc", ""),
                 client_secret_enc=kw.get("client_secret_enc", ""),
@@ -133,11 +135,13 @@ class TestConnections:
                 "access_token": "real-secret-token",
                 "client_id": "",
                 "client_secret": "",
+                "mode": "live",
             },
         )
         assert resp.status_code == 200
         data = resp.json()["connection"]
         assert data["account_id"] == "10012345"
+        assert data["mode"] == "live"
         assert "real-secret-token" not in str(data)
         assert "masked" in str(data)
 
@@ -164,16 +168,77 @@ class TestExecutePipeline:
         assert resp.status_code == 400
         assert "connection" in resp.json()["detail"].lower()
 
-    def test_live_rejected_while_global_disabled(self, live_client, monkeypatch):
+    def test_demo_armed_proceeds_without_global_switch(self, live_client, monkeypatch):
+        """A demo account only needs to be armed — not the global kill-switch."""
         client, routes, db = live_client
         monkeypatch.setattr(db, "get_user_broker_connections", _one_armed)
         monkeypatch.setattr(settings, "LIVE_TRADING_ENABLED", False)
+
+        class FakeResult:
+            def __init__(self):
+                self.allowed = True
+                self.reason = "Proposal awaiting confirmation."
+                self.trade = None
+                self.plan_dict = None
+                self.risk_dict = None
+                self.awaiting_confirmation = True
+                self.confirmation_text = ""
+
+        class FakeService:
+            async def propose_trade(self, session, **kw):
+                assert kw["dry_run"] is False
+                return FakeResult()
+
+        monkeypatch.setattr(
+            "app.services.trading.live.LiveExecutionService",
+            lambda **defaults: FakeService(),
+        )
+
         resp = client.post(
             "/api/trading/live/execute",
             json={"symbol": "BTCUSD", "strategy_key": "momentum", "dry_run": False},
         )
-        assert resp.status_code == 400
-        assert "globally disabled" in resp.json()["detail"]
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["allowed"] is True
+        assert body["awaiting_confirmation"] is True
+
+    def test_live_mode_rejected_while_global_disabled(self, live_client, monkeypatch):
+        """A real-money (live) account is blocked while LIVE_TRADING_ENABLED=false."""
+        client, routes, db = live_client
+
+        async def _one_armed_live(session, user_id):
+            return [_fake_connection(is_live=True, mode="live")]
+
+        monkeypatch.setattr(db, "get_user_broker_connections", _one_armed_live)
+        monkeypatch.setattr(settings, "LIVE_TRADING_ENABLED", False)
+
+        class FakeResult:
+            def __init__(self):
+                self.allowed = False
+                self.reason = "Live trading is disabled globally (LIVE_TRADING_ENABLED=false). Demo accounts may still trade; real-money accounts are blocked."
+                self.trade = None
+                self.plan_dict = None
+                self.risk_dict = None
+                self.awaiting_confirmation = False
+                self.confirmation_text = ""
+
+        class FakeService:
+            async def propose_trade(self, session, **kw):
+                return FakeResult()
+
+        monkeypatch.setattr(
+            "app.services.trading.live.LiveExecutionService",
+            lambda **defaults: FakeService(),
+        )
+
+        resp = client.post(
+            "/api/trading/live/execute",
+            json={"symbol": "BTCUSD", "strategy_key": "momentum", "dry_run": False},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["allowed"] is False
+        assert "disabled globally" in resp.json()["reason"]
 
     def test_dry_run_runs_pipeline_without_broker(self, live_client, monkeypatch):
         client, routes, db = live_client
@@ -186,9 +251,12 @@ class TestExecutePipeline:
                 self.trade = None
                 self.plan_dict = None
                 self.risk_dict = None
+                self.awaiting_confirmation = False
+                self.confirmation_text = ""
 
         class FakeService:
-            async def run_trade(self, session, **kw):
+            async def propose_trade(self, session, **kw):
+                assert kw["dry_run"] is True
                 return FakeResult()
 
         monkeypatch.setattr(
@@ -204,3 +272,40 @@ class TestExecutePipeline:
         body = resp.json()
         assert body["allowed"] is False
         assert body["dry_run"] is True
+
+
+class TestLiveEnabledGuard:
+    def test_live_mode_needs_global_switch(self, monkeypatch):
+        from app.services.trading.live import live_enabled
+
+        monkeypatch.setattr(settings, "LIVE_TRADING_ENABLED", False)
+        conn = _fake_connection(is_live=True, is_active=True, mode="live")
+        result = live_enabled(conn, require_arm=True)
+        assert result.allowed is False
+        assert "disabled globally" in result.reason
+
+    def test_demo_mode_skips_global_switch(self, monkeypatch):
+        from app.services.trading.live import live_enabled
+
+        monkeypatch.setattr(settings, "LIVE_TRADING_ENABLED", False)
+        conn = _fake_connection(is_live=True, is_active=True, mode="demo")
+        result = live_enabled(conn, require_arm=True)
+        assert result.allowed is True
+
+    def test_unarmed_rejected(self, monkeypatch):
+        from app.services.trading.live import live_enabled
+
+        monkeypatch.setattr(settings, "LIVE_TRADING_ENABLED", True)
+        conn = _fake_connection(is_live=False, is_active=True, mode="live")
+        result = live_enabled(conn, require_arm=True)
+        assert result.allowed is False
+        assert "not armed" in result.reason
+
+    def test_inactive_rejected(self, monkeypatch):
+        from app.services.trading.live import live_enabled
+
+        monkeypatch.setattr(settings, "LIVE_TRADING_ENABLED", True)
+        conn = _fake_connection(is_live=True, is_active=False, mode="live")
+        result = live_enabled(conn, require_arm=True)
+        assert result.allowed is False
+        assert "No active broker connection" in result.reason

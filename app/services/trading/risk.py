@@ -1,7 +1,7 @@
 """Risk engine — the hard gate between trade plans and execution.
 
-Every proposed trade must pass the full check list below before the paper
-gateway (or, in a future authorized phase, a live adapter) may touch it.
+Every proposed trade must pass the full check list below before the
+confirmation path or a broker client may touch it.
 The AI can generate the plan; it can never bypass this module.
 """
 

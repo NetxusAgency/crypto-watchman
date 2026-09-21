@@ -133,11 +133,6 @@
   async function loadState() {
     state = await api("/api/dashboard");
     try {
-      state.trading = await api("/api/trading");
-    } catch (e) {
-      state.trading = null;
-    }
-    try {
       state.live = await api("/api/trading/live");
     } catch (e) {
       state.live = null;
@@ -400,60 +395,6 @@
       .join("");
   }
 
-  function renderTrading() {
-    const panel = $("#tradingPanel .card-body");
-    const t = state.trading;
-    if (!t) {
-      panel.classList.add("empty");
-      panel.textContent = "Paper trading data is not ready yet. Add assets and let the monitor scan.";
-      return;
-    }
-    panel.classList.remove("empty");
-
-    const acc = t.account || {};
-    const rows = [
-      `<div class="row"><div><b>Paper balance</b></div><div class="val accent"><b>${fmtUsd(acc.cash)}</b></div></div>`,
-      `<div class="row"><div class="sub">Equity</div><div class="val">${fmtUsd(acc.equity)}</div></div>`,
-      `<div class="row"><div class="sub">Open positions</div><div class="val">${acc.open_count}</div></div>`,
-      `<div class="row"><div class="sub">Account type</div><div class="val">PAPER-ONLY</div></div>`,
-    ].join("");
-
-    const open = t.open_positions || [];
-    const openRows = open.length
-      ? open.map(
-          (p) =>
-            rowHTML(
-              `<div><b>${p.symbol} ${p.direction}</b><div class="sub">${escapeHtml(p.strategy_key)} · entry ${fmt(p.entry_price)} · SL ${fmt(p.stop_loss)}</div></div>` +
-              `<div class="val">${p.quantity} @ ${fmt(p.entry_price)}</div>`
-            )
-        ).join("")
-      : '<div class="sub" style="padding:8px 0">No open paper positions.</div>';
-
-    const closed = t.recent_closed || [];
-    const closedRows = closed.length
-      ? closed.map(
-          (p) =>
-            rowHTML(
-              `<div><b>${p.symbol} ${p.close_reason || "CLOSED"}</b><div class="sub">${p.opened_at ? p.opened_at.slice(0, 10) : ""}</div></div>` +
-              `<div class="${pctClass(p.realized_pnl)}"><b>${p.realized_pnl != null ? (p.realized_pnl >= 0 ? "+" : "") + p.realized_pnl.toFixed(2) : "—"}</b></div>`
-            )
-        ).join("")
-      : '<div class="sub" style="padding:8px 0">No closed trades yet. Confirmed setups open paper trades automatically.</div>';
-
-    const strategies = t.strategies || [];
-    const stratRows = strategies.length
-      ? strategies
-          .map((s) => rowHTML(`<div><b>${escapeHtml(s.name)}</b><div class="sub">${escapeHtml(s.description)}</div></div><div class="val sub">${(s.timeframes || []).join(" · ")}</div>`))
-          .join("")
-      : "";
-
-    panel.innerHTML =
-      rows +
-      '<h4 class="section-h">Open positions</h4>' + openRows +
-      '<h4 class="section-h">Recent closed</h4>' + closedRows +
-      (stratRows ? '<h4 class="section-h">Armed strategies (deterministic rules)</h4>' + stratRows : "");
-  }
-
   function escapeHtml(s) {
     return String(s)
       .replace(/&/g, "&amp;")
@@ -473,7 +414,7 @@
     panel.classList.remove("empty");
 
     const globalOn = !!live.live_enabled_global;
-    $("#liveChip").textContent = globalOn ? "LIVE READY" : "DEFAULT DRY-RUN";
+    $("#liveChip").textContent = globalOn ? "LIVE READY" : "DEMO / DRY-RUN";
     $("#liveChip").classList.toggle("chip-armed", globalOn);
 
     const conns = live.connections || [];
@@ -485,8 +426,8 @@
           .map(
             (c) =>
               rowHTML(
-                `<div><b>${escapeHtml(c.label || c.platform || "cTrader")}</b><div class="sub">${escapeHtml(c.account_id)} · token ${c.has_token ? "stored (encrypted)" : "missing"}</div></div>` +
-                  `<div class="val"><button class="btn mini ${c.is_live ? "disabled" : ""}" data-arm="${c.id}" ${c.is_live ? "disabled" : ""}>${c.is_live ? "Armed ✓" : "Arm for live"}</button></div>`
+                `<div><b>${escapeHtml(c.label || c.platform || "cTrader")}</b><div class="sub">${escapeHtml(c.account_id)} · ${c.mode === "live" ? "💵 live" : "🧪 demo"} · token ${c.has_token ? "stored (encrypted)" : "missing"}</div></div>` +
+                  `<div class="val"><button class="btn mini ${c.is_live ? "disabled" : ""}" data-arm="${c.id}" ${c.is_live ? "disabled" : ""}>${c.is_live ? "Armed ✓" : "Arm for trading"}</button></div>`
               )
           )
           .join("")
@@ -498,39 +439,60 @@
           .join("")
       : '<option value="">No saved strategies — will use Momentum preset</option>';
 
+    const pending = trades.filter((t) => t.status === "PENDING_CONFIRM" || (t.awaiting_confirmation));
+    const pendingRows = pending.length
+      ? pending
+          .map(
+            (t) =>
+              rowHTML(
+                `<div><b>${t.symbol} ${t.direction}</b><div class="sub">Awaiting your ✅/❌ in Telegram</div></div>` +
+                  `<div class="val warn"><b>PENDING</b></div>`
+              )
+          )
+          .join("")
+      : '<div class="sub" style="padding:8px 0">No trade is waiting for confirmation.</div>';
+
     const tradeRows = trades.length
       ? trades
           .map(
             (t) =>
               rowHTML(
                 `<div><b>${t.symbol} ${t.direction}</b><div class="sub">${escapeHtml(t.strategy_name || t.strategy_key)} · ${t.dry_run ? "dry-run" : "REAL"} · ${escapeHtml((t.reason || t.status).slice(0, 60))}</div></div>` +
-                  `<div class="${t.dry_run ? "warn" : "accent"}"><b>${t.status}</b></div>`
+                  `<div class="${t.status === "PENDING_CONFIRM" ? "warn" : t.dry_run ? "flat" : t.status === "CLOSED" ? "up" : "accent"}"><b>${t.status}</b></div>`
               )
           )
           .join("")
       : '<div class="sub" style="padding:8px 0">No live executions yet.</div>';
 
     panel.innerHTML =
-      `<div class="row"><div><b>Global live switch</b></div><div class="val ${globalOn ? "accent" : "warn"}">${globalOn ? "LIVE TRADING ENABLED" : "OFF (dry-runs only)"}</div></div>` +
+      `<div class="row"><div><b>Global live switch</b></div><div class="val ${globalOn ? "accent" : "warn"}">${globalOn ? "LIVE TRADING ENABLED" : "ONLY DEMO / DRY-RUN"}</div></div>` +
+      '<div class="row"><div class="sub">No automatic execution</div><div class="val sub">Every order waits for your ✅ in Telegram</div></div>' +
       '<h4 class="section-h">Broker connections</h4>' +
       connRows +
-      '<h4 class="section-h">Connect a real account (cTrader)</h4>' +
+      '<h4 class="section-h">Connect a cTrader account</h4>' +
       `<div class="live-form">
         <input id="liveLabel" class="inp" placeholder="Label (e.g. My cTrader account)" value="My cTrader account" />
         <input id="liveAccount" class="inp" placeholder="Account ID" />
         <input id="liveToken" class="inp" type="password" placeholder="Access token" />
         <input id="liveClientId" class="inp" type="password" placeholder="Client ID (optional)" />
         <input id="liveClientSecret" class="inp" type="password" placeholder="Client secret (optional)" />
+        <select id="liveMode" class="inp">
+          <option value="demo">🧪 Demo account (simulated funds)</option>
+          <option value="live">💵 Live account (real money)</option>
+        </select>
         <button id="liveSaveBtn" class="btn">Save connection (encrypted)</button>
+        <div class="sub" style="margin-top:6px">One open trade per account — a new trade waits until the last one is fulfilled.</div>
       </div>` +
       '<h4 class="section-h">Run a setup</h4>' +
       `<div class="live-form">
         <select id="liveStrategy" class="inp">${stratOptions}</select>
         <input id="liveSymbol" class="inp" placeholder="Pair (e.g. BTCUSD)" value="BTCUSD" />
-        <button id="liveDryRun" class="btn">Dry-run execute</button>
-        ${globalOn ? '<button id="liveGo" class="btn btn-danger">Execute live</button>' : ""}
+        <button id="liveDryRun" class="btn">Dry-run preview</button>
+        <button id="liveGo" class="btn btn-danger">Propose trade (confirm in Telegram)</button>
       </div>` +
-      '<h4 class="section-h">Recent live executions</h4>' +
+      '<h4 class="section-h">Awaiting confirmation</h4>' +
+      pendingRows +
+      '<h4 class="section-h">Recent executions</h4>' +
       tradeRows;
 
     $("#liveSaveBtn") &&
@@ -555,6 +517,7 @@
           access_token: v("liveToken"),
           client_id: v("liveClientId"),
           client_secret: v("liveClientSecret"),
+          mode: v("liveMode") || "demo",
           is_live: false,
         }),
       });
@@ -589,7 +552,11 @@
           dry_run: dry,
         }),
       });
-      showError(res.reason || (res.allowed ? "Execution recorded." : "Execution rejected."));
+      if (res.awaiting_confirmation) {
+        showError("Proposal sent — confirm it in Telegram (✅ Confirm). Nothing was placed.");
+      } else {
+        showError(res.reason || (res.allowed ? "Dry-run preview recorded." : "Rejected."));
+      }
       await loadState();
     } catch (e) {
       showError(e.message);
@@ -635,7 +602,6 @@
     renderPortfolio();
     renderWallets();
     renderOpps();
-    renderTrading();
     renderLive();
     renderAlerts();
     renderNews();

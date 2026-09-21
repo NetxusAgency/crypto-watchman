@@ -254,11 +254,11 @@ class TestTradePlan:
         signal = _signal("BTC", "4h", "general", _flat_series())
         assert build_trade_plan(signal) is None
 
-    def test_paper_only_flag(self):
+    def test_plan_payload_flag(self):
         signal = _signal("BTC", "4h", "trend_pullback", _bullish_series())
         plan = build_trade_plan(signal, preset_specs()["trend_pullback"])
         payload = plan.to_dict()
-        assert payload["paper_only"] is True
+        assert payload["verified_for_live"] is True
         assert payload["stage"] == "SETUP_FOUND"
         assert payload["plan_id"].startswith("TP-")
 

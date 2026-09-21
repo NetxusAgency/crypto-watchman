@@ -1,8 +1,8 @@
 """Trade plans: the machine-readable output of a confirmed trade signal.
 
 A TradePlan is the single carrier handed from the strategy engine to the risk
-engine and finally the paper execution gateway. It is marked `PAPER_ONLY` by
-construction — nothing in this phase can promote it to live execution.
+engine and finally the live execution service. Plans are broker-agnostic; they
+describe entries, stops and targets but never touch an account themselves.
 """
 
 import random
@@ -18,9 +18,9 @@ STAGES = (
     "ANALYSING",
     "SETUP_FOUND",
     "RISK_CHECK",
-    "PAPER_PENDING",
-    "PAPER_OPEN",
-    "PAPER_CLOSED",
+    "PENDING_CONFIRM",
+    "PLACED",
+    "CLOSED",
     "REJECTED",
 )
 
@@ -29,9 +29,9 @@ class TradePlanStage(str, Enum):
     ANALYSING = "ANALYSING"
     SETUP_FOUND = "SETUP_FOUND"
     RISK_CHECK = "RISK_CHECK"
-    PAPER_PENDING = "PAPER_PENDING"
-    PAPER_OPEN = "PAPER_OPEN"
-    PAPER_CLOSED = "PAPER_CLOSED"
+    PENDING_CONFIRM = "PENDING_CONFIRM"
+    PLACED = "PLACED"
+    CLOSED = "CLOSED"
     REJECTED = "REJECTED"
 
 
@@ -116,7 +116,7 @@ class TradePlan:
             "rule_results": [r.to_dict() if hasattr(r, "to_dict") else r for r in self.rule_results],
             "context": self.context,
             "created_at": self.created_at,
-            "paper_only": True,
+            "verified_for_live": True,
         }
 
 

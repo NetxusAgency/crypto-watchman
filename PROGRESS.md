@@ -325,3 +325,29 @@ connection + `LIVE_TRADING_ENABLED=true` (global kill-switch, default off).
   "momentum" preset for BTCUSD/ETHUSD only; cTrader client instantiated per-execute with CTRADER_API_BASE_URL.
 - Committing + pushing this slice to github.com/NetxusAgency/crypto-watchman.git (see latest commit).
 
+## 2H.1 - Paper removed + two-phase confirmation flow ✅
+
+The paper-trading layer was stripped out entirely. Trading now happens only through cTrader `demo` / `live`
+accounts, and **no order is ever placed without an explicit Telegram ✅ from the user** (dry-runs excluded).
+
+### What changed
+- **Deleted** `app/database/models/paper.py`, `app/execution/paper.py`, `app/execution/gateway.py`,
+  `app/execution/base.py`, `app/services/trading/monitor.py`; removed `User.paper_accounts` + paper exports;
+  removed the `/api/trading` paper endpoint and its Mini App card/tab.
+- **Two-phase execution** (`app/services/trading/live.py`): `propose_trade(dry_run=False)` validates the full
+  pipeline and persists a `PENDING_CONFIRM` LiveTrade row but sends nothing; a Telegram card with
+  `liveexec:{id}:confirm|reject` buttons is sent; `confirm_trade` re-runs guards then places the order (`PLACED`),
+  `reject_trade` marks `REJECTED`. Dry-run stays immediate (`DRYRUN-<plan_id>`, no confirmation).
+- **No-duplicate guard**: a new real proposal is blocked while the connection has a `PENDING_CONFIRM`/`PLACED`
+  trade or the broker holds any open position; `sync_closed` frees the cap once the position is gone.
+- **Account mode** (`BrokerConnection.mode`, default `demo`): the global `LIVE_TRADING_ENABLED` kill-switch gates
+  ONLY `mode="live"` (real-money) accounts; demo accounts just need arming. `_ADDITIVE_COLUMNS` adds the column
+  on startup; `save_broker_connection` persists `mode`; Mini App connect form got a demo/live selector.
+- **Stages renamed**: `PAPER_PENDING/PAPER_OPEN/PAPER_CLOSED` → `PENDING_CONFIRM/PLACED/CLOSED`;
+  `to_dict()` now reports `verified_for_live: true`.
+- **Background scan** (`run_live_scan`) never executes automatically: it proposes + reconciles only.
+- **Tests**: deleted `test_paper.py` + `test_monitor.py`; reworked `test_api.py` (live endpoint auth),
+  `test_trading.py` (`verified_for_live`), `test_live_api.py` (propose/confirm/reject stubs, demo-vs-live mode
+  guards). Full suite: **196 passed in ~30s**; `node --check` clean.
+- Committing + pushing this slice to github.com/NetxusAgency/crypto-watchman.git (see latest commit).
+

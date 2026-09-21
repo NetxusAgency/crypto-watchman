@@ -2,7 +2,7 @@ from aiogram import Bot, Dispatcher
 from app.core.config import settings
 from app.bot.middlewares.db import DbSessionMiddleware
 from app.bot.handlers import (
-    base, portfolio, alerts, analytics, sentiment, whale, digest, news, assistant, wallet, opportunities, menu, callbacks
+    base, portfolio, alerts, analytics, sentiment, whale, digest, news, assistant, wallet, opportunities, menu, callbacks, live
 )
 
 # Initialize Bot
@@ -28,3 +28,4 @@ dp.include_router(wallet.router)
 dp.include_router(opportunities.router)
 dp.include_router(menu.router)
 dp.include_router(callbacks.router)
+dp.include_router(live.router)

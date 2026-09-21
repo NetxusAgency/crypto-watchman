@@ -66,9 +66,8 @@ class Settings(BaseSettings):
     # Opportunity engine (Phase 2F)
     OPPORTUNITY_SCAN_MINUTES: int = Field(default=15, ge=5)
 
-    # Paper trading monitor (Phase 2G)
+    # Background trade scan (Phase 2H live execution)
     TRADING_SCAN_MINUTES: int = Field(default=15, ge=5)
-    TRADING_MARK_MINUTES: int = Field(default=5, ge=1)
 
     # Live trading (Phase 2H / LIVE_EXECUTION)
     # Global master kill-switch: while False nothing can reach a real broker,

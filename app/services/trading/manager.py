@@ -1,19 +1,16 @@
 """Plan manager — the state machine that owns a trade's lifecycle.
 
 Stage transitions:
-    ANALYSING -> SETUP_FOUND -> RISK_CHECK -> PAPER_PENDING -> PAPER_OPEN
-                 -> PAPER_CLOSED     (or -> REJECTED at any gate)
-The plan never auto-promotes to live execution; every exit from this module
-towards an account is explicitly `PAPER_ONLY`.
+    ANALYSING -> SETUP_FOUND -> RISK_CHECK -> PENDING_CONFIRM
+                 -> PLACED -> CLOSED     (or -> REJECTED at any gate)
+The manager is broker-agnostic: it analyses signals and runs the risk gate.
+Execution against a cTrader account happens exclusively through
+`LiveExecutionService` in `app/services/trading/live.py`.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.execution.gateway import PaperGateway, get_or_create_paper_account
-from app.execution.paper import CloseEvent
 from app.services.trading.risk import RiskEngine, RiskReport
 from app.services.trading.strategy_engine import StrategySpec, evaluate_signal
 from app.services.trading.trade_plan import TradePlan, TradePlanStage, build_trade_plan
@@ -36,18 +33,13 @@ class ProposedTrade:
             "plan": self.plan.to_dict() if self.plan else None,
             "risk": self.risk.to_dict() if self.risk else None,
             "rejected_reasons": self.rejected_reasons,
-            "paper_only": True,
+            "verified_for_live": True,
         }
 
 
 class PlanManager:
-    def __init__(
-        self,
-        risk: RiskEngine | None = None,
-        gateway: PaperGateway | None = None,
-    ):
+    def __init__(self, risk: RiskEngine | None = None):
         self.risk = risk or RiskEngine()
-        self.gateway = gateway or PaperGateway()
 
     def evaluate(
         self,
@@ -75,7 +67,7 @@ class PlanManager:
             open_symbols=open_symbols,
         )
         if report.passed:
-            proposed.plan.stage = TradePlanStage.PAPER_PENDING
+            proposed.plan.stage = TradePlanStage.PENDING_CONFIRM
             proposed.state = "ready"
         else:
             proposed.plan.stage = TradePlanStage.REJECTED
@@ -84,39 +76,3 @@ class PlanManager:
         proposed.risk = report
         proposed.stage = proposed.plan.stage
         return proposed
-
-    async def commit(
-        self,
-        session: AsyncSession,
-        proposed: ProposedTrade,
-        *,
-        user_id: int | None = None,
-    ) -> ProposedTrade:
-        """Execute an approved plan against the paper gateway (PAPER_ONLY)."""
-        if proposed.plan is None or proposed.state != "ready" or proposed.risk is None:
-            return proposed
-        if user_id is not None:
-            proposed.plan.context["user_id"] = user_id
-        result = await self.gateway.execute(session, proposed.plan, proposed.risk)
-        if result.ok:
-            proposed.plan.stage = TradePlanStage.PAPER_OPEN
-            proposed.stage = proposed.plan.stage
-            proposed.state = "open"
-        else:
-            proposed.plan.stage = TradePlanStage.REJECTED
-            proposed.stage = proposed.plan.stage
-            proposed.state = "rejected"
-            proposed.rejected_reasons = result.rejected
-        return proposed
-
-    async def monitor(
-        self,
-        session: AsyncSession,
-        user_id: int,
-        prices: dict[str, float],
-    ) -> tuple[list[CloseEvent], dict]:
-        """Mark the paper account to market and return close events."""
-        account = await get_or_create_paper_account(session, user_id)
-        events = await self.gateway.mark_account(session, account, prices)
-        stats = self.gateway.engine.stats(events)
-        return events, {"cash": account.cash, "equity": account.equity, "stats": stats}

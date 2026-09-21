@@ -55,6 +55,9 @@ class BrokerConnectionPayload(BaseModel):
     access_token: str = ""
     client_id: str = ""
     client_secret: str = ""
+    # "demo" (simulated funds) or "live" (real money). Live needs the global
+    # kill-switch; demo is safe to arm without it.
+    mode: str = "demo"
     is_live: bool = False
 
 
@@ -78,6 +81,7 @@ def _scalar_masked_connection(c) -> dict:
         "label": c.label,
         "platform": c.platform,
         "account_id": c.account_id,
+        "mode": (c.mode or "demo"),
         "is_live": bool(c.is_live),
         "is_active": bool(c.is_active),
         "live_enabled_global": bool(settings.LIVE_TRADING_ENABLED),
@@ -378,78 +382,6 @@ async def dashboard(
     }
 
 
-@router.get("/trading")
-async def trading_overview(
-    session: AsyncSession = Depends(get_session),
-    telegram_id: int = Depends(require_telegram_id),
-):
-    """Paper trading read-model: armed strategies, paper account, open/closed trades."""
-    from app.database.models import PaperPosition
-    from app.execution.gateway import get_or_create_paper_account
-    from app.services.trading.strategy_engine import preset_specs
-
-    user = await db_service.get_or_create_user(session, telegram_id=telegram_id)
-    account = await get_or_create_paper_account(session, user.id)
-
-    open_positions = (
-        await session.execute(
-            select(PaperPosition)
-            .where(PaperPosition.account_id == account.id, PaperPosition.status == "OPEN")
-            .order_by(PaperPosition.opened_at.desc())
-        )
-    ).scalars().all()
-    recent_closed = (
-        await session.execute(
-            select(PaperPosition)
-            .where(PaperPosition.account_id == account.id, PaperPosition.status == "CLOSED")
-            .order_by(PaperPosition.closed_at.desc())
-            .limit(12)
-        )
-    ).scalars().all()
-
-    def _pos(p):
-        return {
-            "plan_id": p.plan_id,
-            "symbol": p.symbol,
-            "direction": p.direction,
-            "strategy_key": p.strategy_key,
-            "entry_price": round(p.entry_price, 6),
-            "quantity": p.quantity,
-            "stop_loss": round(p.stop_loss, 6),
-            "take_profit_1": round(p.take_profit_1, 6) if p.take_profit_1 else None,
-            "take_profit_2": round(p.take_profit_2, 6) if p.take_profit_2 else None,
-            "status": p.status,
-            "close_reason": p.close_reason,
-            "realized_pnl": round(p.realized_pnl, 2) if p.realized_pnl is not None else None,
-            "opened_at": p.opened_at.isoformat() if p.opened_at else None,
-            "closed_at": p.closed_at.isoformat() if p.closed_at else None,
-        }
-
-    strategies = [
-        {
-            "key": key,
-            "name": spec.name,
-            "description": spec.description,
-            "direction": spec.direction,
-            "timeframes": spec.timeframes,
-        }
-        for key, spec in preset_specs().items()
-    ]
-    return {
-        "paper_only": True,
-        "monitor_timeframe": "4h",
-        "strategies": strategies,
-        "account": {
-            "initial_balance": round(account.initial_balance, 2),
-            "cash": round(account.cash, 2),
-            "equity": round(account.equity, 2),
-            "open_count": len(open_positions),
-        },
-        "open_positions": [_pos(p) for p in open_positions],
-        "recent_closed": [_pos(p) for p in recent_closed],
-    }
-
-
 @router.get("/trading/live")
 async def trading_live_overview(
     session: AsyncSession = Depends(get_session),
@@ -550,6 +482,7 @@ async def save_trading_connection(
         session,
         user.id,
         connection_id=match.id if match else None,
+        mode=payload.mode or "demo",
         **updates,
     )
     return {
@@ -605,14 +538,17 @@ async def execute_live_trade(
     session: AsyncSession = Depends(get_session),
     telegram_id: int = Depends(require_telegram_id),
 ):
-    """Dry-run (default) or live execution of the user's strategy.
+    """Dry-run (default) or a live trade proposal.
 
     `dry_run=True` exercises the entire pipeline (broker truth + setup + risk +
-    sizing) but never touches the real broker. `dry_run=False` requires:
-      1. a saved, armed, active connection
-      2. settings.LIVE_TRADING_ENABLED == True (global kill-switch, default off)
+    sizing) but never touches the real broker.
+
+    `dry_run=False` validates the same pipeline and persists a PENDING_CONFIRM
+    trade. It does NOT place an order — a Telegram message with ✅/❌ is sent to
+    the user, and the order only fires when they confirm. For `mode == "live"`
+    connections this additionally requires settings.LIVE_TRADING_ENABLED; demo
+    accounts only need the connection to be armed.
     """
-    from app.execution.ctrader import CTraderClient
     from app.services.trading.live import LiveExecutionService
     from app.services.assistant.klines import kline_fetcher
 
@@ -622,11 +558,6 @@ async def execute_live_trade(
         raise HTTPException(status_code=400, detail="symbol is required")
 
     dry_run = bool(payload.dry_run)
-    if not dry_run and not settings.LIVE_TRADING_ENABLED:
-        raise HTTPException(
-            status_code=400,
-            detail="Live execution is globally disabled (LIVE_TRADING_ENABLED=false). Use dry_run=true.",
-        )
 
     connection = None
     if payload.connection_id:
@@ -651,8 +582,8 @@ async def execute_live_trade(
         )
 
     strategy_key = payload.strategy_key or "momentum"
-    service = LiveExecutionService(client=CTraderClient())
-    result = await service.run_trade(
+    service = LiveExecutionService()
+    result = await service.propose_trade(
         session,
         user=user,
         connection=connection,
@@ -661,6 +592,7 @@ async def execute_live_trade(
         strategy_name=payload.strategy_name or strategy_key,
         dry_run=dry_run,
         kline_source=kline_fetcher,
+        notify=not dry_run,
     )
     return {
         "allowed": result.allowed,
@@ -669,4 +601,6 @@ async def execute_live_trade(
         "plan": result.plan_dict,
         "risk": result.risk_dict,
         "dry_run": dry_run,
+        "awaiting_confirmation": result.awaiting_confirmation,
+        "confirmation_text": result.confirmation_text,
     }

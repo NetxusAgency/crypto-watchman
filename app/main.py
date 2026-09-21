@@ -27,16 +27,14 @@ from app.services.assistant.klines import kline_fetcher
 from app.services.wallet import wallet_service
 from app.services.opportunity import engine as opportunity_engine
 from app.services.opportunity import PRIORITY_ICONS, format_opportunity
-from app.services.trading.monitor import TradingMonitor
 from app.api import router as api_router
-
-trading_monitor = TradingMonitor()
 
 # Additive DB columns added after a table already exists (create_all cannot add
 # columns to an existing table). Each entry is applied idempotently at startup.
 _ADDITIVE_COLUMNS: list[tuple[str, str, str]] = [
     ("whale_transactions", "direction", "VARCHAR(10)"),
     ("whale_transactions", "direction_confidence", "VARCHAR(10)"),
+    ("broker_connections", "mode", "VARCHAR(10)"),
 ]
 
 
@@ -144,40 +142,23 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Opportunity background scan failed: {e}")
 
-    async def run_trading_scan():
-        try:
-            async with async_session_maker() as session:
-                result = await trading_monitor.scan_once(session, kline_fetcher)
-            if result["opened"]:
-                logger.info(f"Trading scan: {result['opened']} paper trade(s) opened.")
-        except Exception as e:
-            logger.warning(f"Trading background scan failed: {e}")
-
-    async def run_paper_mark():
-        try:
-            async with async_session_maker() as session:
-                closed = await trading_monitor.mark_all(session, price_fetcher)
-            if closed:
-                logger.info(f"Paper mark-to-market: {closed} close(s) recorded.")
-        except Exception as e:
-            logger.warning(f"Paper mark-to-market failed: {e}")
-
     async def run_live_scan():
-        """Automated live-execution scan.
+        """Automated live-execution scan — never executes automatically.
 
-        Only ever touches a real broker when BOTH are true:
-          - the user's connection is armed (is_live=True, active)
-          - settings.LIVE_TRADING_ENABLED is True (global kill-switch)
-        Otherwise the scan runs in dry-run mode (full pipeline, broker untouched)
-        so the user can watch setups form before enabling real trading.
+        Only ever touches the confirmation path (PENDING_CONFIRM + Telegram
+        ✅/❌ buttons) when the user armed the connection AND the account mode
+        allows it (demo: arm is enough; live: arm + global kill-switch).
+        Otherwise the scan runs in dry-run mode (full pipeline, broker
+        untouched) so the user can watch setups form before enabling trading.
+        Open-but-unfulfilled PLACED trades are reconciled to CLOSED first, so
+        the no-duplicate rule frees itself once the broker position is gone.
         """
         try:
-            from app.execution.ctrader import CTraderClient
             from app.services.trading.live import LiveExecutionService
             from sqlalchemy import select
 
             async with async_session_maker() as session:
-                from app.database.models import BrokerConnection
+                from app.database.models import BrokerConnection, User
 
                 rows = (
                     await session.execute(
@@ -187,13 +168,11 @@ async def lifespan(app: FastAPI):
                 if not rows:
                     return
 
-                service = LiveExecutionService(client=CTraderClient())
+                service = LiveExecutionService()
                 for connection in rows:
-                    if not settings.LIVE_TRADING_ENABLED and not connection.is_live:
-                        continue
-                    _dry = not (settings.LIVE_TRADING_ENABLED and connection.is_live)
-                    from app.database.models import User
-
+                    _dry = not connection.is_live or (
+                        connection.mode == "live" and not settings.LIVE_TRADING_ENABLED
+                    )
                     user = (
                         await session.execute(
                             select(User).where(User.id == connection.user_id)
@@ -201,9 +180,13 @@ async def lifespan(app: FastAPI):
                     ).scalar_one_or_none()
                     if user is None:
                         continue
+                    try:
+                        await service.sync_closed(session, connection)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(f"Live scan sync_closed failed: {e}")
                     for symbol in ["BTCUSD", "ETHUSD"]:
                         try:
-                            result = await service.run_trade(
+                            result = await service.propose_trade(
                                 session,
                                 user=user,
                                 connection=connection,
@@ -212,6 +195,7 @@ async def lifespan(app: FastAPI):
                                 strategy_name="Momentum",
                                 dry_run=_dry,
                                 kline_source=kline_fetcher,
+                                notify=True,
                             )
                             if result.allowed:
                                 logger.info(
@@ -260,11 +244,9 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(run_whale_scan, "interval", minutes=settings.WHALE_SCAN_MINUTES)
     scheduler.add_job(run_wallet_refresh, "interval", minutes=settings.WALLET_REFRESH_MINUTES)
     scheduler.add_job(run_opportunity_scan, "interval", minutes=settings.OPPORTUNITY_SCAN_MINUTES)
-    scheduler.add_job(run_trading_scan, "interval", minutes=settings.TRADING_SCAN_MINUTES)
-    scheduler.add_job(run_paper_mark, "interval", minutes=settings.TRADING_MARK_MINUTES)
     scheduler.add_job(run_live_scan, "interval", minutes=settings.TRADING_SCAN_MINUTES)
     scheduler.start()
-    logger.info("Started internal background scheduler (alerts 30s, listings 2m, digest daily at 09:00, news 10m, whales 5m, wallet 30m, opportunities 15m, trading 15m, paper mark 5m).")
+    logger.info("Started internal background scheduler (alerts 30s, listings 2m, digest daily at 09:00, news 10m, whales 5m, wallet 30m, opportunities 15m, live trading 15m).")
 
     # 3. Start Telegram Bot Polling (supervised, auto-restarts on crash)
     async def run_polling_worker():

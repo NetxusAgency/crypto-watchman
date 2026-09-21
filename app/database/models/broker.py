@@ -21,7 +21,11 @@ class BrokerConnection(Base):
     access_token_enc: Mapped[str] = mapped_column(Text, default="")
     client_id_enc: Mapped[str] = mapped_column(Text, default="")
     client_secret_enc: Mapped[str] = mapped_column(Text, default="")
-    # Arming flag: only an armed + LIVE_TRADING_ENABLED connection can trade.
+    # Account type: "demo" (simulated funds on the real platform) or "live".
+    # Demo accounts may be armed without the global kill-switch; live ones
+    # additionally require settings.LIVE_TRADING_ENABLED.
+    mode: Mapped[str] = mapped_column(String(10), default="demo")
+    # Arming flag: explicit per-user consent for real orders on this account.
     is_live: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
@@ -51,8 +55,8 @@ class LiveTrade(Base):
     take_profit_1: Mapped[float | None] = mapped_column(Float, nullable=True)
     take_profit_2: Mapped[float | None] = mapped_column(Float, nullable=True)
     order_id: Mapped[str] = mapped_column(String(60), default="")
-    # PLACED / REJECTED / CLOSED
-    status: Mapped[str] = mapped_column(String(20), default="PLACED")
+    # PENDING_CONFIRM / PLACED / REJECTED / CLOSED
+    status: Mapped[str] = mapped_column(String(20), default="PENDING_CONFIRM")
     reason: Mapped[str] = mapped_column(Text, default="")
     # True = simulated execution (never touches the broker).
     dry_run: Mapped[bool] = mapped_column(Boolean, default=True)

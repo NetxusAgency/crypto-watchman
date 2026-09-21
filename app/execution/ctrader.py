@@ -1,8 +1,8 @@
 """cTrader Connect Open API v2 adapter.
 
-Thin, testable HTTP client for the cTrader REST API. Lives behind the same
-`ExecutionGateway` contract as the paper gateway, but is a real broker client:
-it must ONLY ever be reached after `LiveExecutionService` passes its guard.
+Thin, testable HTTP client for the cTrader REST API. It is a real broker
+client: it must ONLY ever be reached after `LiveExecutionService` passes its
+guard and (for real-money accounts) the user confirms the trade in Telegram.
 
 Reference endpoints (v2):
     GET  /getAccounts   -> list accounts w/ balance & equity for this token

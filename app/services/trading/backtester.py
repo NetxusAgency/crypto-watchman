@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.execution.paper import PaperExecutionEngine
 from app.services.trading.strategy_engine import StrategySpec, evaluate_signal
 from app.services.trading.trade_plan import build_trade_plan
 
