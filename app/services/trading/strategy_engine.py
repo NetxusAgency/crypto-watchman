@@ -333,11 +333,11 @@ _CHECKS: dict[str, Callable[[MarketContext, dict], tuple[bool, str]]] = {
     ),
     "macd_hist_positive": lambda ctx, p: (
         ctx.snapshot.macd_hist is not None and ctx.snapshot.macd_hist > 0,
-        f"MACD histogram {ctx.snapshot.macd_hist or 'n/a':+}",
+        f"MACD histogram {(ctx.snapshot.macd_hist if ctx.snapshot.macd_hist is not None else 0):+.4f}",
     ),
     "macd_hist_negative": lambda ctx, p: (
         ctx.snapshot.macd_hist is not None and ctx.snapshot.macd_hist < 0,
-        f"MACD histogram {ctx.snapshot.macd_hist or 'n/a':+}",
+        f"MACD histogram {(ctx.snapshot.macd_hist if ctx.snapshot.macd_hist is not None else 0):+.4f}",
     ),
     "price_at_support": lambda ctx, p: (
         _nearest_support(ctx) is not None

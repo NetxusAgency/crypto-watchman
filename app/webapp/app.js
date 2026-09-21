@@ -137,6 +137,11 @@
     } catch (e) {
       state.trading = null;
     }
+    try {
+      state.live = await api("/api/trading/live");
+    } catch (e) {
+      state.live = null;
+    }
     $("#planTag").style.display = "";
     renderAll();
     return state;
@@ -457,6 +462,140 @@
       .replace(/"/g, "&quot;");
   }
 
+  async function renderLive() {
+    const panel = $("#livePanel .card-body");
+    const live = state.live;
+    if (!live) {
+      panel.classList.add("empty");
+      panel.textContent = "Live trading is not configured yet.";
+      return;
+    }
+    panel.classList.remove("empty");
+
+    const globalOn = !!live.live_enabled_global;
+    $("#liveChip").textContent = globalOn ? "LIVE READY" : "DEFAULT DRY-RUN";
+    $("#liveChip").classList.toggle("chip-armed", globalOn);
+
+    const conns = live.connections || [];
+    const saved = live.saved_strategies || [];
+    const trades = live.recent_live_trades || [];
+
+    const connRows = conns.length
+      ? conns
+          .map(
+            (c) =>
+              rowHTML(
+                `<div><b>${escapeHtml(c.label || c.platform || "cTrader")}</b><div class="sub">${escapeHtml(c.account_id)} · token ${c.has_token ? "stored (encrypted)" : "missing"}</div></div>` +
+                  `<div class="val"><button class="btn mini ${c.is_live ? "disabled" : ""}" data-arm="${c.id}" ${c.is_live ? "disabled" : ""}>${c.is_live ? "Armed ✓" : "Arm for live"}</button></div>`
+              )
+          )
+          .join("")
+      : '<div class="sub" style="padding:8px 0">No broker connections yet. Connect a cTrader account below.</div>';
+
+    const stratOptions = saved.length
+      ? saved
+          .map((s) => `<option value="${escapeHtml(s.key)}">${escapeHtml(s.name)}</option>`)
+          .join("")
+      : '<option value="">No saved strategies — will use Momentum preset</option>';
+
+    const tradeRows = trades.length
+      ? trades
+          .map(
+            (t) =>
+              rowHTML(
+                `<div><b>${t.symbol} ${t.direction}</b><div class="sub">${escapeHtml(t.strategy_name || t.strategy_key)} · ${t.dry_run ? "dry-run" : "REAL"} · ${escapeHtml((t.reason || t.status).slice(0, 60))}</div></div>` +
+                  `<div class="${t.dry_run ? "warn" : "accent"}"><b>${t.status}</b></div>`
+              )
+          )
+          .join("")
+      : '<div class="sub" style="padding:8px 0">No live executions yet.</div>';
+
+    panel.innerHTML =
+      `<div class="row"><div><b>Global live switch</b></div><div class="val ${globalOn ? "accent" : "warn"}">${globalOn ? "LIVE TRADING ENABLED" : "OFF (dry-runs only)"}</div></div>` +
+      '<h4 class="section-h">Broker connections</h4>' +
+      connRows +
+      '<h4 class="section-h">Connect a real account (cTrader)</h4>' +
+      `<div class="live-form">
+        <input id="liveLabel" class="inp" placeholder="Label (e.g. My cTrader account)" value="My cTrader account" />
+        <input id="liveAccount" class="inp" placeholder="Account ID" />
+        <input id="liveToken" class="inp" type="password" placeholder="Access token" />
+        <input id="liveClientId" class="inp" type="password" placeholder="Client ID (optional)" />
+        <input id="liveClientSecret" class="inp" type="password" placeholder="Client secret (optional)" />
+        <button id="liveSaveBtn" class="btn">Save connection (encrypted)</button>
+      </div>` +
+      '<h4 class="section-h">Run a setup</h4>' +
+      `<div class="live-form">
+        <select id="liveStrategy" class="inp">${stratOptions}</select>
+        <input id="liveSymbol" class="inp" placeholder="Pair (e.g. BTCUSD)" value="BTCUSD" />
+        <button id="liveDryRun" class="btn">Dry-run execute</button>
+        ${globalOn ? '<button id="liveGo" class="btn btn-danger">Execute live</button>' : ""}
+      </div>` +
+      '<h4 class="section-h">Recent live executions</h4>' +
+      tradeRows;
+
+    $("#liveSaveBtn") &&
+      $("#liveSaveBtn").addEventListener("click", () => saveLiveConnection());
+    $("#liveDryRun") &&
+      $("#liveDryRun").addEventListener("click", () => runLiveTrade(true));
+    const go = $("#liveGo");
+    go && go.addEventListener("click", () => runLiveTrade(false));
+    panel.querySelectorAll("[data-arm]").forEach((b) =>
+      b.addEventListener("click", () => armLiveConnection(b.dataset.arm))
+    );
+  }
+
+  async function saveLiveConnection() {
+    try {
+      const v = (id) => (document.getElementById(id) || {}).value || "";
+      const res = await api("/api/trading/live/connections", {
+        method: "POST",
+        body: JSON.stringify({
+          label: v("liveLabel"),
+          account_id: v("liveAccount"),
+          access_token: v("liveToken"),
+          client_id: v("liveClientId"),
+          client_secret: v("liveClientSecret"),
+          is_live: false,
+        }),
+      });
+      await loadState();
+      showError(res.detail ? String(res.detail) : "Connection saved (encrypted).");
+    } catch (e) {
+      showError(e.message);
+    }
+  }
+
+  async function armLiveConnection(id) {
+    try {
+      await api(`/api/trading/live/connections/${id}/arm`, {
+        method: "POST",
+        body: JSON.stringify({ is_live: true }),
+      });
+      await loadState();
+    } catch (e) {
+      showError(e.message);
+    }
+  }
+
+  async function runLiveTrade(dry) {
+    const sym = (document.getElementById("liveSymbol") || {}).value || "BTCUSD";
+    const strat = (document.getElementById("liveStrategy") || {}).value || "momentum";
+    try {
+      const res = await api("/api/trading/live/execute", {
+        method: "POST",
+        body: JSON.stringify({
+          symbol: sym.trim().toUpperCase(),
+          strategy_key: strat,
+          dry_run: dry,
+        }),
+      });
+      showError(res.reason || (res.allowed ? "Execution recorded." : "Execution rejected."));
+      await loadState();
+    } catch (e) {
+      showError(e.message);
+    }
+  }
+
   async function tokenFromFragment() {
     const m = window.location.hash.match(/#app_token=([^&]+)/);
     if (m) {
@@ -497,6 +636,7 @@
     renderWallets();
     renderOpps();
     renderTrading();
+    renderLive();
     renderAlerts();
     renderNews();
   }

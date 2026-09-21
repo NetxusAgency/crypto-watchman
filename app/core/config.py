@@ -70,6 +70,17 @@ class Settings(BaseSettings):
     TRADING_SCAN_MINUTES: int = Field(default=15, ge=5)
     TRADING_MARK_MINUTES: int = Field(default=5, ge=1)
 
+    # Live trading (Phase 2H / LIVE_EXECUTION)
+    # Global master kill-switch: while False nothing can reach a real broker,
+    # regardless of per-user arming.
+    LIVE_TRADING_ENABLED: bool = False
+    # Max % of live equity a single position may consume (notional cap).
+    LIVE_MAX_POSITION_PCT: float = Field(default=10.0, ge=0.5, le=100.0)
+    # Hard daily loss limit for live accounts (% of balance at day start).
+    LIVE_DAILY_LOSS_LIMIT_PCT: float = Field(default=5.0, ge=0.5, le=100.0)
+    # cTrader Connect API v2 base URL.
+    CTRADER_API_BASE_URL: str = Field(default="https://connect.ctrader.com/api/v2")
+
     # Mini App (Phase 2E)
     PUBLIC_BASE_URL: str = Field(default="http://localhost:8000")
     # Mini App auth token lifetime (hours)

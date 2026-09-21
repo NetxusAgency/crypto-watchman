@@ -1,7 +1,16 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from app.core.config import settings
-from app.database.models import User, Portfolio, Alert, Subscription, Notification
+from app.database.models import (
+    User,
+    Portfolio,
+    Alert,
+    Subscription,
+    Notification,
+BrokerConnection,
+    LiveTrade,
+    TradingStrategy,
+)
 from datetime import datetime, timedelta, timezone
 
 async def get_or_create_user(session: AsyncSession, telegram_id: int, username: str | None = None) -> User:
@@ -132,3 +141,111 @@ async def add_notification(session: AsyncSession, user_id: int, message: str) ->
     await session.commit()
     await session.refresh(notif)
     return notif
+async def get_user_broker_connections(session: AsyncSession, user_id: int) -> list[BrokerConnection]:
+    """All of the user's saved broker connections (decrypted secrets handled by caller)."""
+    stmt = (
+        select(BrokerConnection)
+        .where(BrokerConnection.user_id == user_id)
+        .order_by(BrokerConnection.created_at.desc())
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_broker_connection(session: AsyncSession, user_id: int, connection_id: int) -> BrokerConnection | None:
+    stmt = select(BrokerConnection).where(
+        BrokerConnection.id == connection_id, BrokerConnection.user_id == user_id
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def save_broker_connection(
+    session: AsyncSession,
+    user_id: int,
+    *,
+    connection_id: int | None = None,
+    label: str = "",
+    platform: str = "ctrader",
+    account_id: str = "",
+    access_token_enc: str = "",
+    client_id_enc: str = "",
+    client_secret_enc: str = "",
+    is_live: bool = False,
+) -> BrokerConnection:
+    """Create or update a broker connection; secrets arrive already encrypted."""
+    connection = None
+    if connection_id is not None:
+        connection = await get_broker_connection(session, user_id, connection_id)
+    if connection is None:
+        stmt = select(BrokerConnection).where(
+            BrokerConnection.user_id == user_id, BrokerConnection.account_id == account_id
+        )
+        result = await session.execute(stmt)
+        connection = result.scalar_one_or_none()
+
+    if connection is None:
+        connection = BrokerConnection(
+            user_id=user_id,
+            label=label or f"{platform} {account_id}",
+            platform=platform,
+            account_id=account_id,
+        )
+        session.add(connection)
+    connection.label = label or connection.label
+    connection.platform = platform or connection.platform
+    if account_id:
+        connection.account_id = account_id
+    if access_token_enc:
+        connection.access_token_enc = access_token_enc
+    if client_id_enc:
+        connection.client_id_enc = client_id_enc
+    if client_secret_enc:
+        connection.client_secret_enc = client_secret_enc
+    if is_live != connection.is_live:
+        connection.is_live = is_live
+    await session.commit()
+    await session.refresh(connection)
+    return connection
+
+
+async def set_broker_connection_live(session: AsyncSession, user_id: int, connection_id: int, is_live: bool) -> bool:
+    """Arm (is_live=True) or disarm a connection. Returns False if not found."""
+    connection = await get_broker_connection(session, user_id, connection_id)
+    if not connection:
+        return False
+    connection.is_live = is_live
+    connection.is_active = True
+    await session.commit()
+    return True
+
+
+async def delete_broker_connection(session: AsyncSession, user_id: int, connection_id: int) -> bool:
+    stmt = delete(BrokerConnection).where(
+        BrokerConnection.id == connection_id, BrokerConnection.user_id == user_id
+    )
+    result = await session.execute(stmt)
+    await session.commit()
+    return result.rowcount > 0
+
+
+async def get_user_live_trades(session: AsyncSession, user_id: int, limit: int = 30) -> list[LiveTrade]:
+    stmt = (
+        select(LiveTrade)
+        .where(LiveTrade.user_id == user_id)
+        .order_by(LiveTrade.opened_at.desc())
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_user_strategies(session: AsyncSession, user_id: int, limit: int = 20) -> list[TradingStrategy]:
+    stmt = (
+        select(TradingStrategy)
+        .where(TradingStrategy.user_id == user_id)
+        .order_by(TradingStrategy.updated_at.desc())
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())

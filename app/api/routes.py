@@ -48,6 +48,45 @@ class AuthPayload(BaseModel):
     dev_token: str = ""
 
 
+class BrokerConnectionPayload(BaseModel):
+    label: str = ""
+    platform: str = "ctrader"
+    account_id: str = ""
+    access_token: str = ""
+    client_id: str = ""
+    client_secret: str = ""
+    is_live: bool = False
+
+
+class ArmConnectionPayload(BaseModel):
+    is_live: bool = True
+
+
+class LiveExecutePayload(BaseModel):
+    symbol: str
+    strategy_key: str = ""
+    strategy_name: str = ""
+    connection_id: int | None = None
+    dry_run: bool = True
+
+
+def _scalar_masked_connection(c) -> dict:
+    from app.services.broker import mask_secret
+
+    return {
+        "id": c.id,
+        "label": c.label,
+        "platform": c.platform,
+        "account_id": c.account_id,
+        "is_live": bool(c.is_live),
+        "is_active": bool(c.is_active),
+        "live_enabled_global": bool(settings.LIVE_TRADING_ENABLED),
+        "has_token": bool(c.access_token_enc),
+        "access_token_masked": mask_secret(c.access_token_enc),
+        "created_at": c.created_at.isoformat() if c.created_at else None,
+    }
+
+
 @router.get("/meta")
 async def meta():
     """Public bootstrap data used by the Mini App frontend."""
@@ -408,4 +447,226 @@ async def trading_overview(
         },
         "open_positions": [_pos(p) for p in open_positions],
         "recent_closed": [_pos(p) for p in recent_closed],
+    }
+
+
+@router.get("/trading/live")
+async def trading_live_overview(
+    session: AsyncSession = Depends(get_session),
+    telegram_id: int = Depends(require_telegram_id),
+):
+    """Live-execution read-model: global kill-switch, saved connections (masked),
+    the user's saved strategies + presets, and recent live trades."""
+    from app.services.trading.strategy_engine import preset_specs
+
+    user = await db_service.get_or_create_user(session, telegram_id=telegram_id)
+    connections = await db_service.get_user_broker_connections(session, user.id)
+
+    live_trades = await db_service.get_user_live_trades(session, user.id, limit=20)
+
+    saved_strategies = await db_service.get_user_strategies(session, user.id, limit=20)
+
+    return {
+        "live_enabled_global": bool(settings.LIVE_TRADING_ENABLED),
+        "connections": [_scalar_masked_connection(c) for c in connections],
+        "armed_count": sum(1 for c in connections if c.is_live and c.is_active),
+        "strategies": [
+            {"key": key, "name": spec.name, "description": spec.description, "direction": spec.direction,
+             "timeframes": spec.timeframes}
+            for key, spec in preset_specs().items()
+        ],
+        "saved_strategies": [
+            {"key": s.key, "name": s.name, "description": s.description,
+             "timeframes": [tf.strip() for tf in (s.timeframes or "").split(",") if tf.strip()]}
+            for s in saved_strategies
+        ],
+        "recent_live_trades": [
+            {
+                "id": t.id,
+                "plan_id": t.plan_id,
+                "symbol": t.symbol,
+                "direction": t.direction,
+                "strategy_key": t.strategy_key,
+                "strategy_name": t.strategy_name,
+                "status": t.status,
+                "dry_run": bool(t.dry_run),
+                "reason": t.reason,
+                "entry_price": round(t.entry_price, 6),
+                "quantity": t.quantity,
+                "order_id": t.order_id,
+                "opened_at": t.opened_at.isoformat() if t.opened_at else None,
+            }
+            for t in live_trades
+        ],
+    }
+
+
+@router.get("/trading/live/connections")
+async def trading_live_connections(
+    session: AsyncSession = Depends(get_session),
+    telegram_id: int = Depends(require_telegram_id),
+):
+    user = await db_service.get_or_create_user(session, telegram_id=telegram_id)
+    connections = await db_service.get_user_broker_connections(session, user.id)
+    return {
+        "connections": [_scalar_masked_connection(c) for c in connections],
+        "live_enabled_global": bool(settings.LIVE_TRADING_ENABLED),
+    }
+
+
+@router.post("/trading/live/connections")
+async def save_trading_connection(
+    payload: BrokerConnectionPayload,
+    session: AsyncSession = Depends(get_session),
+    telegram_id: int = Depends(require_telegram_id),
+):
+    """Save or update a broker connection. Secrets are encrypted at rest with
+    Fernet (SECRET_KEY-derived); the API never returns plaintext secrets."""
+    from app.services.broker import encrypt_secret
+
+    user = await db_service.get_or_create_user(session, telegram_id=telegram_id)
+
+    existing = await db_service.get_user_broker_connections(session, user.id)
+    match = next(
+        (c for c in existing if (payload.account_id and c.account_id == payload.account_id) or False),
+        None,
+    )
+
+    updates = {
+        "label": payload.label,
+        "platform": payload.platform or "ctrader",
+        "account_id": payload.account_id,
+        "is_live": payload.is_live,
+    }
+    # Only overwrite non-empty secret fields; masked/blank ones leave the stored value.
+    if payload.access_token:
+        updates["access_token_enc"] = encrypt_secret(payload.access_token)
+    if payload.client_id:
+        updates["client_id_enc"] = encrypt_secret(payload.client_id)
+    if payload.client_secret:
+        updates["client_secret_enc"] = encrypt_secret(payload.client_secret)
+
+    connection = await db_service.save_broker_connection(
+        session,
+        user.id,
+        connection_id=match.id if match else None,
+        **updates,
+    )
+    return {
+        "ok": True,
+        "connection": _scalar_masked_connection(connection),
+    }
+
+
+@router.post("/trading/live/connections/{connection_id}/arm")
+async def arm_trading_connection(
+    connection_id: int,
+    payload: ArmConnectionPayload,
+    session: AsyncSession = Depends(get_session),
+    telegram_id: int = Depends(require_telegram_id),
+):
+    """Arm (is_live=True) or disarm a connection. Arming is the explicit per-account
+    consent gate for live execution and is only ever safe with one armed account."""
+    user = await db_service.get_or_create_user(session, telegram_id=telegram_id)
+
+    # Never allow more than one armed connection per user (safety-first).
+    if payload.is_live:
+        connections = await db_service.get_user_broker_connections(session, user.id)
+        for other in connections:
+            if other.id != connection_id and other.is_live:
+                await db_service.set_broker_connection_live(
+                    session, user.id, other.id, is_live=False
+                )
+
+    ok = await db_service.set_broker_connection_live(
+        session, user.id, connection_id, is_live=payload.is_live
+    )
+    if not ok:
+        raise HTTPException(status_code=404, detail="Broker connection not found")
+    return {"ok": True, "connection_id": connection_id, "is_live": bool(payload.is_live)}
+
+
+@router.delete("/trading/live/connections/{connection_id}")
+async def delete_trading_connection(
+    connection_id: int,
+    session: AsyncSession = Depends(get_session),
+    telegram_id: int = Depends(require_telegram_id),
+):
+    user = await db_service.get_or_create_user(session, telegram_id=telegram_id)
+    ok = await db_service.delete_broker_connection(session, user.id, connection_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Broker connection not found")
+    return {"ok": True, "connection_id": connection_id}
+
+
+@router.post("/trading/live/execute")
+async def execute_live_trade(
+    payload: LiveExecutePayload,
+    session: AsyncSession = Depends(get_session),
+    telegram_id: int = Depends(require_telegram_id),
+):
+    """Dry-run (default) or live execution of the user's strategy.
+
+    `dry_run=True` exercises the entire pipeline (broker truth + setup + risk +
+    sizing) but never touches the real broker. `dry_run=False` requires:
+      1. a saved, armed, active connection
+      2. settings.LIVE_TRADING_ENABLED == True (global kill-switch, default off)
+    """
+    from app.execution.ctrader import CTraderClient
+    from app.services.trading.live import LiveExecutionService
+    from app.services.assistant.klines import kline_fetcher
+
+    user = await db_service.get_or_create_user(session, telegram_id=telegram_id)
+    symbol = payload.symbol.strip().upper()
+    if not symbol:
+        raise HTTPException(status_code=400, detail="symbol is required")
+
+    dry_run = bool(payload.dry_run)
+    if not dry_run and not settings.LIVE_TRADING_ENABLED:
+        raise HTTPException(
+            status_code=400,
+            detail="Live execution is globally disabled (LIVE_TRADING_ENABLED=false). Use dry_run=true.",
+        )
+
+    connection = None
+    if payload.connection_id:
+        connections = await db_service.get_user_broker_connections(session, user.id)
+        connection = next(
+            (c for c in connections if c.id == payload.connection_id), None
+        )
+        if connection is None:
+            raise HTTPException(status_code=404, detail="Broker connection not found")
+    else:
+        connections = await db_service.get_user_broker_connections(session, user.id)
+        candidates = [c for c in connections if c.is_active]
+        if dry_run and candidates:
+            connection = candidates[0]
+        else:
+            armed = [c for c in candidates if c.is_live]
+            connection = armed[0] if armed else None
+    if connection is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No armed active broker connection. Save and arm a connection first.",
+        )
+
+    strategy_key = payload.strategy_key or "momentum"
+    service = LiveExecutionService(client=CTraderClient())
+    result = await service.run_trade(
+        session,
+        user=user,
+        connection=connection,
+        symbol=symbol,
+        strategy_key=strategy_key,
+        strategy_name=payload.strategy_name or strategy_key,
+        dry_run=dry_run,
+        kline_source=kline_fetcher,
+    )
+    return {
+        "allowed": result.allowed,
+        "reason": result.reason,
+        "trade": result.trade.to_dict() if result.trade else None,
+        "plan": result.plan_dict,
+        "risk": result.risk_dict,
+        "dry_run": dry_run,
     }

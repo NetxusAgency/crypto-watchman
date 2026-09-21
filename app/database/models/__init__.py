@@ -9,6 +9,7 @@ from app.database.models.wallet import Wallet, WalletBalance
 from app.database.models.exchange import ListingEvent
 from app.database.models.opportunity import OpportunitySignal, OpportunityScore
 from app.database.models.paper import PaperAccount, PaperPosition, PaperFill
+from app.database.models.broker import BrokerConnection, LiveTrade
 
 
 class User(Base):
@@ -29,6 +30,8 @@ class User(Base):
     analyses: Mapped[list["TradeAnalysis"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     wallets: Mapped[list["Wallet"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     paper_accounts: Mapped[list["PaperAccount"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    broker_connections: Mapped[list["BrokerConnection"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    live_trades: Mapped[list["LiveTrade"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class Portfolio(Base):
@@ -86,4 +89,5 @@ __all__ = [
     "Wallet", "WalletBalance", "ListingEvent",
     "OpportunitySignal", "OpportunityScore",
     "PaperAccount", "PaperPosition", "PaperFill",
+    "BrokerConnection", "LiveTrade",
 ]

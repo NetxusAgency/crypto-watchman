@@ -197,3 +197,21 @@ body {
   }
   .tab.active { color: #fff; }
 }
+
+.chip-warn { background: var(--card2); color: #e8963c; }
+.chip-armed { background: rgba(21, 205, 118, 0.15); color: #0ea95f; }
+.live-form { display: grid; gap: 8px; padding: 8px 0; }
+.live-form .inp {
+  width: 100%; box-sizing: border-box;
+  background: var(--card); border: 1px solid var(--border); color: var(--text);
+  border-radius: 10px; padding: 10px 12px; font-size: 14px;
+}
+.live-form .inp:focus { outline: none; border-color: var(--accent); }
+.btn {
+  background: var(--accent); color: #fff; border: 0; border-radius: 10px;
+  padding: 10px 14px; font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.btn:active { transform: scale(0.97); }
+.btn.mini { padding: 6px 10px; font-size: 12px; }
+.btn.disabled, .btn:disabled { opacity: 0.5; cursor: default; }
+.btn-danger { background: #c0392b; }

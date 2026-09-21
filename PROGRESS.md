@@ -294,3 +294,34 @@ A Telegram Mini App (web front end over the FastAPI) that renders the user's liv
 - `PUBLIC_BASE_URL` must point at the deployed HTTPS host (e.g. Render) for the button to appear and work; default localhost target supports dev via BotFather/localhost preview.
 - Dashboard reads only — mutations stay in the bot (connect wallets, set alerts, recompute scores). Prices fetched live via `price_fetcher`; everything else cached by the background jobs.
 - 16 new unit tests; full suite: **125 passed in 23s**.
+---
+
+## 2H - Live Trading - IMPLEMENTED & TESTED
+
+**Wiring slice done.** Serves the ask: Mini App user connects a real cTrader account, picks a pair (BTCUSD/ETHUSD)
+and a saved strategy, runs the Trading Assistant pipeline (guard -> deterministic spec -> PlanManager evaluate ->
+RiskEngine -> sizing -> broker), auto-executed. Live execution is dry-run by default; real fills need an ARMED
+connection + `LIVE_TRADING_ENABLED=true` (global kill-switch, default off).
+
+### What was added this slice
+- app/services/db_service.py - broker CRUD + live reads: get_user_broker_connections / get_broker_connection /
+  save_broker_connection (Fernet-encrypt secrets) / set_broker_connection_live (arm/disarm, flags user) /
+  delete_broker_connection / get_user_live_trades / get_user_strategies.
+- app/api/routes.py - GET /api/trading/live (overview: kill-switch, masked connections, presets + saved strategies,
+  recent live trades), GET/POST /api/trading/live/connections, POST /api/trading/live/connections/{id}/arm (only
+  one armed per user), DELETE /api/trading/live/connections/{id}, POST /api/trading/live/execute (dry_run default;
+  dry_run=False -> 400 if global disabled or no armed active connection). Secrets never returned plaintext.
+- app/main.py - run_live_scan interval job (scans active BrokerConnections, dry-run unless armed + global enabled;
+  symbols BTCUSD/ETHUSD, strategy "momentum" for now, kline_fetcher source).
+- Mini App UI: app/webapp/index.html #livePanel (chip shows DEFAULT DRY-RUN), app.js renderLive + handlers
+  (save/arm/execute), styles.css .chip-warn/.chip-armed/.btn*. Script tag cache-buster bumped to v=8.
+- Initial broker-connection + live model came earlier (broker.py, ctrader.py, live.py core) - kept unchanged.
+
+### Status
+- Tests: .\\venv\\Scripts\\python.exe -m pytest tests -q -> 208 passed (was 197; +11 live tests in test_live_api.py:
+  encryption roundtrip/mask, endpoint auth, save-masks-secret, arm/delete 404, dry-run-requires-connection,
+  live-rejected-when-global-disabled, dry-run pipeline w/o broker).
+- Potential follow-ups (not blocking): arm/disarm already enforces single-armed; strategy picker in Mini App runs
+  "momentum" preset for BTCUSD/ETHUSD only; cTrader client instantiated per-execute with CTRADER_API_BASE_URL.
+- Committing + pushing this slice to github.com/NetxusAgency/crypto-watchman.git (see latest commit).
+

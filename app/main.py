@@ -162,6 +162,67 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Paper mark-to-market failed: {e}")
 
+    async def run_live_scan():
+        """Automated live-execution scan.
+
+        Only ever touches a real broker when BOTH are true:
+          - the user's connection is armed (is_live=True, active)
+          - settings.LIVE_TRADING_ENABLED is True (global kill-switch)
+        Otherwise the scan runs in dry-run mode (full pipeline, broker untouched)
+        so the user can watch setups form before enabling real trading.
+        """
+        try:
+            from app.execution.ctrader import CTraderClient
+            from app.services.trading.live import LiveExecutionService
+            from sqlalchemy import select
+
+            async with async_session_maker() as session:
+                from app.database.models import BrokerConnection
+
+                rows = (
+                    await session.execute(
+                        select(BrokerConnection).where(BrokerConnection.is_active == True)
+                    )
+                ).scalars().all()
+                if not rows:
+                    return
+
+                service = LiveExecutionService(client=CTraderClient())
+                for connection in rows:
+                    if not settings.LIVE_TRADING_ENABLED and not connection.is_live:
+                        continue
+                    _dry = not (settings.LIVE_TRADING_ENABLED and connection.is_live)
+                    from app.database.models import User
+
+                    user = (
+                        await session.execute(
+                            select(User).where(User.id == connection.user_id)
+                        )
+                    ).scalar_one_or_none()
+                    if user is None:
+                        continue
+                    for symbol in ["BTCUSD", "ETHUSD"]:
+                        try:
+                            result = await service.run_trade(
+                                session,
+                                user=user,
+                                connection=connection,
+                                symbol=symbol,
+                                strategy_key="momentum",
+                                strategy_name="Momentum",
+                                dry_run=_dry,
+                                kline_source=kline_fetcher,
+                            )
+                            if result.allowed:
+                                logger.info(
+                                    f"Live scan {symbol}: {result.reason} "
+                                    f"[dry_run={_dry}]"
+                                )
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning(f"Live scan {symbol} failed: {e}")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Live background scan failed: {e}")
+
     async def notify_elevated_opportunities(elevated: list[dict]):
         from sqlalchemy import select
         from app.database.models import User, Notification
@@ -201,6 +262,7 @@ async def lifespan(app: FastAPI):
     scheduler.add_job(run_opportunity_scan, "interval", minutes=settings.OPPORTUNITY_SCAN_MINUTES)
     scheduler.add_job(run_trading_scan, "interval", minutes=settings.TRADING_SCAN_MINUTES)
     scheduler.add_job(run_paper_mark, "interval", minutes=settings.TRADING_MARK_MINUTES)
+    scheduler.add_job(run_live_scan, "interval", minutes=settings.TRADING_SCAN_MINUTES)
     scheduler.start()
     logger.info("Started internal background scheduler (alerts 30s, listings 2m, digest daily at 09:00, news 10m, whales 5m, wallet 30m, opportunities 15m, trading 15m, paper mark 5m).")
 
