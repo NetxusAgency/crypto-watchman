@@ -510,6 +510,28 @@
     );
   }
 
+  function isTelegramWebApp() {
+    return !!(window.Telegram && window.Telegram.WebApp);
+  }
+
+  function openOAuthUrl(url) {
+    // The Telegram Mini App WebView blocks normal navigation to external hosts,
+    // so external links must go through the platform's openExternalLink (it
+    // opens the default browser). Outside Telegram we navigate in place so the
+    // OAuth callback returns to the same tab.
+    if (isTelegramWebApp()) {
+      const tw = window.Telegram.WebApp;
+      if (tw.openExternalLink) {
+        tw.openExternalLink(url);
+        return false;
+      }
+      const w = window.open(url, "_blank");
+      if (w) return false;
+    }
+    window.location.href = url;
+    return true;
+  }
+
   async function startCtidOAuth() {
     const v = (id) => (document.getElementById(id) || {}).value || "";
     const label = v("liveLabel");
@@ -525,7 +547,17 @@
         }),
       });
       if (res && res.authorize_url) {
-        window.location.href = res.authorize_url;
+        const sameTab = openOAuthUrl(res.authorize_url);
+        if (sameTab && isTelegramWebApp()) {
+          showError("Opening cTrader authorization…");
+        }
+        if (!sameTab) {
+          showError(
+            "Opening the cTrader grant page in your browser. If nothing opened, tap this link:\n" +
+              res.authorize_url +
+              "\n(After granting access you'll be returned here automatically.)"
+          );
+        }
       } else {
         showError(res.detail ? String(res.detail) : "Could not start authorization.");
       }
