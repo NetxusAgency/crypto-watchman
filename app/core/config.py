@@ -86,9 +86,10 @@ class Settings(BaseSettings):
     # redirect URI must exactly match the one registered on the application.
     CTRADER_OAUTH_AUTHORIZE_URL: str = Field(default="https://id.ctrader.com/oauth/authorize")
     CTRADER_OAUTH_TOKEN_URL: str = Field(default="https://id.ctrader.com/oauth/token")
-    CTRADER_OAUTH_REDIRECT_URI: str = Field(
-        default="http://localhost:8000/api/trading/live/ctid/callback"
-    )
+    # When empty, the callback URI is derived from PUBLIC_BASE_URL, so a Render /
+    # prod deployment only needs PUBLIC_BASE_URL set and the redirect URI stays
+    # in lock-step with it (https://<host>/api/trading/live/ctid/callback).
+    CTRADER_OAUTH_REDIRECT_URI: str = ""
     # How often the background sweep refreshes near-expiry cTID access tokens.
     CTRADER_TOKEN_REFRESH_MINUTES: int = Field(default=30, ge=5)
 

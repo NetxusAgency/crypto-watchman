@@ -379,3 +379,14 @@ OAuth flow, stores the token pair encrypted, and auto-renews before expiry.
   encryption round-trip). Full suite: **220 passed in ~34s**; `node --check` clean.
 - Committing + pushing this slice to github.com/NetxusAgency/crypto-watchman.git (see latest commit).
 
+## 2H.3 - Production OAuth redirect (Render) ✅
+
+Deployed to https://crypto-watchman.onrender.com. `PUBLIC_BASE_URL` is set there to the Render host; the OAuth
+callback URI now auto-derives from it so a production deploy needs no extra env var.
+- `CTRADER_OAUTH_REDIRECT_URI` defaults to empty: `get_redirect_uri()` returns the explicit value when set,
+  else `{PUBLIC_BASE_URL}/api/trading/live/ctid/callback`, else the localhost dev fallback. Used by
+  `build_authorize_url`, `exchange_code`, and the `/trading/live/ctid/start` response.
+- `.env.example` documents `PUBLIC_BASE_URL` + the cTrader OAuth settings.
+- 3 new tests for redirect derivation + 1 updated for the resolver. Full suite: **223 passed in ~33s**.
+- Committing + pushing this slice to github.com/NetxusAgency/crypto-watchman.git (see latest commit).
+

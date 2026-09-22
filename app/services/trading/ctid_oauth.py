@@ -37,6 +37,7 @@ __all__ = [
     "exchange_code",
     "refresh_access_token",
     "consume_pending_state",
+    "get_redirect_uri",
 ]
 
 # Refresh when the access token has this little runway left (seconds).
@@ -72,6 +73,22 @@ def _token_url() -> str:
     return (settings.CTRADER_OAUTH_TOKEN_URL or "").rstrip("/")
 
 
+def get_redirect_uri() -> str:
+    """The callback URI to register on the cTrader Open API application.
+
+    Explicit CTRADER_OAUTH_REDIRECT_URI wins; otherwise it is derived from
+    PUBLIC_BASE_URL so a single host setting keeps the OAuth round-trip correct
+    in production (Render etc.) and defaults to localhost for local dev.
+    """
+    configured = (settings.CTRADER_OAUTH_REDIRECT_URI or "").strip()
+    if configured:
+        return configured
+    base = (settings.PUBLIC_BASE_URL or "").rstrip("/")
+    if base:
+        return f"{base}/api/trading/live/ctid/callback"
+    return "http://localhost:8000/api/trading/live/ctid/callback"
+
+
 def build_authorize_url(*, client_id: str, state: str, redirect_uri: str | None = None) -> str:
     """The URL the user's browser opens on cTrader to grant account access."""
     if not client_id:
@@ -79,7 +96,7 @@ def build_authorize_url(*, client_id: str, state: str, redirect_uri: str | None 
     params = {
         "client_id": client_id,
         "response_type": "code",
-        "redirect_uri": redirect_uri or settings.CTRADER_OAUTH_REDIRECT_URI,
+        "redirect_uri": redirect_uri or get_redirect_uri(),
         "state": state,
     }
     return f"{_authorize_url()}?{urlencode(params)}"
@@ -147,7 +164,7 @@ async def exchange_code(
             "code": code,
             "client_id": client_id,
             "client_secret": client_secret,
-            "redirect_uri": redirect_uri or settings.CTRADER_OAUTH_REDIRECT_URI,
+            "redirect_uri": redirect_uri or get_redirect_uri(),
         }
     )
     if not body.get("access_token"):

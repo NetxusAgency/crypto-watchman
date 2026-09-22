@@ -558,7 +558,11 @@ async def start_ctid_authorization(
     hand it back so the browser can do the grant. Client/secret are never
     returned; the callback stores them encrypted on the new BrokerConnection.
     """
-    from app.services.trading.ctid_oauth import CTraderOAuthError, start_authorization
+    from app.services.trading.ctid_oauth import (
+        CTraderOAuthError,
+        get_redirect_uri,
+        start_authorization,
+    )
 
     if not payload.client_id or not payload.client_secret:
         raise HTTPException(
@@ -577,7 +581,7 @@ async def start_ctid_authorization(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {
         "authorize_url": authorize_url,
-        "redirect_uri": settings.CTRADER_OAUTH_REDIRECT_URI,
+        "redirect_uri": get_redirect_uri(),
     }
 
 

@@ -46,11 +46,31 @@ class TestAuthorizeUrl:
         assert qs["client_id"] == ["cid-123"]
         assert qs["response_type"] == ["code"]
         assert qs["state"] == ["st4t3"]
-        assert qs["redirect_uri"][0] == settings.CTRADER_OAUTH_REDIRECT_URI
+        assert qs["redirect_uri"][0] == oauth.get_redirect_uri()
 
     def test_missing_client_id_rejected(self):
         with pytest.raises(oauth.CTraderOAuthError):
             oauth.build_authorize_url(client_id="", state="s")
+
+    def test_redirect_derived_from_public_base_url(self, monkeypatch):
+        monkeypatch.setattr(settings, "CTRADER_OAUTH_REDIRECT_URI", "")
+        monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "https://crypto-watchman.onrender.com")
+        assert (
+            oauth.get_redirect_uri()
+            == "https://crypto-watchman.onrender.com/api/trading/live/ctid/callback"
+        )
+
+    def test_redirect_explicit_wins(self, monkeypatch):
+        monkeypatch.setattr(
+            settings, "CTRADER_OAUTH_REDIRECT_URI", "https://example.com/cb"
+        )
+        monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "https://crypto-watchman.onrender.com")
+        assert oauth.get_redirect_uri() == "https://example.com/cb"
+
+    def test_redirect_localhost_fallback(self, monkeypatch):
+        monkeypatch.setattr(settings, "CTRADER_OAUTH_REDIRECT_URI", "")
+        monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "")
+        assert oauth.get_redirect_uri() == "http://localhost:8000/api/trading/live/ctid/callback"
 
     def test_start_then_consume_roundtrip(self):
         url = oauth.start_authorization(
