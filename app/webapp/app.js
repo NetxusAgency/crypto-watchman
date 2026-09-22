@@ -477,11 +477,11 @@
           <option value="live">💵 Live account (real money)</option>
         </select>
         <button id="liveOAuthBtn" class="btn btn-primary">Connect with cTID (OAuth)</button>
-        <div class="sub" style="margin-top:6px">Opens cTrader authorization in a new tab. Needs an Open API application (id.ctrader.com → Open API).</div>
+        <div class="sub" style="margin-top:6px">Step 1: create an app at id.ctrader.com → Open API → Your applications (set redirect URI to https://crypto-watchman.onrender.com/api/trading/live/ctid/callback). Step 2: paste the Client ID + Client Secret below, then click Connect with cTID.</div>
         <input id="liveAccount" class="inp" placeholder="Account ID (manual)" />
         <input id="liveToken" class="inp" type="password" placeholder="Access token (manual)" />
-        <input id="liveClientId" class="inp" type="password" placeholder="Client ID (manual, optional)" />
-        <input id="liveClientSecret" class="inp" type="password" placeholder="Client secret (manual, optional)" />
+        <input id="liveClientId" class="inp" type="password" placeholder="Client ID (Open API app - REQUIRED for OAuth)" />
+        <input id="liveClientSecret" class="inp" type="password" placeholder="Client secret (Open API app - REQUIRED for OAuth)" />
         <button id="liveSaveBtn" class="btn">Save connection (encrypted)</button>
         <div class="sub" style="margin-top:6px">One open trade per account — a new trade waits until the last one is fulfilled.</div>
       </div>` +
