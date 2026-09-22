@@ -379,14 +379,19 @@ OAuth flow, stores the token pair encrypted, and auto-renews before expiry.
   encryption round-trip). Full suite: **220 passed in ~34s**; `node --check` clean.
 - Committing + pushing this slice to github.com/NetxusAgency/crypto-watchman.git (see latest commit).
 
-## 2H.3 - Production OAuth redirect (Render) ✅
+## 2H.3 - Production OAuth redirect + cTrader contract fixes ✅
 
-Deployed to https://crypto-watchman.onrender.com. `PUBLIC_BASE_URL` is set there to the Render host; the OAuth
-callback URI now auto-derives from it so a production deploy needs no extra env var.
-- `CTRADER_OAUTH_REDIRECT_URI` defaults to empty: `get_redirect_uri()` returns the explicit value when set,
-  else `{PUBLIC_BASE_URL}/api/trading/live/ctid/callback`, else the localhost dev fallback. Used by
-  `build_authorize_url`, `exchange_code`, and the `/trading/live/ctid/start` response.
-- `.env.example` documents `PUBLIC_BASE_URL` + the cTrader OAuth settings.
-- 3 new tests for redirect derivation + 1 updated for the resolver. Full suite: **223 passed in ~33s**.
+Deployed to https://crypto-watchman.onrender.com. Debugged "Connect with cTID not working": the flow was
+deviating from the official cTrader OAuth contract (help.ctrader.com/open-api/account-authentication/).
+- **Authorize step**: now `https://id.ctrader.com/my/settings/openapi/grantingaccess/` (was
+  `/oauth/authorize`) with `scope` (REQUIRED, default `trading`) + `product=web`; `state` keeps the
+  encrypted-credential handle. `CTRADER_OAUTH_SCOPE` configurable.
+- **Token step**: `https://openapi.ctrader.com/apps/token` (was `id.ctrader.com/oauth/token`); grant params
+  go in the query string; responses parsed for cTrader's camelCase keys (`accessToken`/`refreshToken`/
+  `expiresIn`) with snake_case fallback.
+- `redirect_uri` auto-derives from `PUBLIC_BASE_URL` (Render sets it → correct callback without extra env).
+- `.env.example` documents the corrected endpoints/scope. Fixed a pre-existing flaky test
+  (`token_hex(3).upper()` can be all-digits → `isupper()` False ~6% of runs): assertion now `code == code.upper()`.
+- Full suite: **226 passed in ~50s**.
 - Committing + pushing this slice to github.com/NetxusAgency/crypto-watchman.git (see latest commit).
 

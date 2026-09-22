@@ -216,7 +216,7 @@ class TestCodeLogin:
         resp = self._client().post("/api/auth/code")
         assert resp.status_code == 200
         code = resp.json()["code"]
-        assert len(code) == 6 and code.isalnum() and code.isupper()
+        assert len(code) == 6 and code.isalnum() and code == code.upper()
 
     def test_poll_pending_before_approval(self):
         code = self._client().post("/api/auth/code").json()["code"]

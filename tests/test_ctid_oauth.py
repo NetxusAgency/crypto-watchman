@@ -38,15 +38,31 @@ class _FakeSession:
 
 class TestAuthorizeUrl:
     def test_build_url_pieces(self, monkeypatch):
-        monkeypatch.setattr(settings, "CTRADER_OAUTH_AUTHORIZE_URL", "https://id.ctrader.com/oauth/authorize")
+        monkeypatch.setattr(
+            settings,
+            "CTRADER_OAUTH_AUTHORIZE_URL",
+            "https://id.ctrader.com/my/settings/openapi/grantingaccess/",
+        )
         url = oauth.build_authorize_url(client_id="cid-123", state="st4t3")
         parsed = urlparse(url)
         assert parsed.netloc == "id.ctrader.com"
+        assert parsed.path == "/my/settings/openapi/grantingaccess"
         qs = parse_qs(parsed.query)
         assert qs["client_id"] == ["cid-123"]
-        assert qs["response_type"] == ["code"]
+        assert qs["scope"] == ["trading"]
+        assert qs["product"] == ["web"]
         assert qs["state"] == ["st4t3"]
         assert qs["redirect_uri"][0] == oauth.get_redirect_uri()
+
+    def test_scope_from_settings_when_customized(self, monkeypatch):
+        monkeypatch.setattr(settings, "CTRADER_OAUTH_SCOPE", "accounts")
+        url = oauth.build_authorize_url(client_id="cid-123", state="s")
+        assert parse_qs(urlparse(url).query)["scope"] == ["accounts"]
+
+    def test_scope_explicit_arg_wins(self, monkeypatch):
+        monkeypatch.setattr(settings, "CTRADER_OAUTH_SCOPE", "trading")
+        url = oauth.build_authorize_url(client_id="cid-123", state="s", scope="accounts")
+        assert parse_qs(urlparse(url).query)["scope"] == ["accounts"]
 
     def test_missing_client_id_rejected(self):
         with pytest.raises(oauth.CTraderOAuthError):
@@ -203,6 +219,18 @@ class TestEnsureValidToken:
         assert decrypt_secret(conn.refresh_token_enc) == "new-refresh"
         now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
         assert now_utc < conn.token_expires_at <= now_utc + timedelta(hours=2)
+
+    def test_refresh_camelcase_response_keys(self, monkeypatch):
+        async def camel_refresh(**kw):
+            return {"accessToken": "AT-2", "refreshToken": "RT-2", "expiresIn": 2628000}
+
+        monkeypatch.setattr(oauth, "refresh_access_token", camel_refresh)
+        conn = _connection(token_expires_at=datetime.utcnow() - timedelta(minutes=2))
+        assert asyncio.run(oauth.ensure_valid_token(_FakeSession(), conn)) is True
+        assert decrypt_secret(conn.access_token_enc) == "AT-2"
+        assert decrypt_secret(conn.refresh_token_enc) == "RT-2"
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        assert now_utc + timedelta(days=30) - timedelta(minutes=5) <= conn.token_expires_at <= now_utc + timedelta(days=31)
 
     def test_expired_refresh_failure(self, monkeypatch):
         async def boom(**kw):

@@ -84,8 +84,13 @@ class Settings(BaseSettings):
     # application created at id.ctrader.com -> Open API -> Your applications.
     # The browser authorize step and the token exchange use these URLs; the
     # redirect URI must exactly match the one registered on the application.
-    CTRADER_OAUTH_AUTHORIZE_URL: str = Field(default="https://id.ctrader.com/oauth/authorize")
-    CTRADER_OAUTH_TOKEN_URL: str = Field(default="https://id.ctrader.com/oauth/token")
+    CTRADER_OAUTH_AUTHORIZE_URL: str = Field(
+        default="https://id.ctrader.com/my/settings/openapi/grantingaccess/"
+    )
+    CTRADER_OAUTH_TOKEN_URL: str = Field(default="https://openapi.ctrader.com/apps/token")
+    # Permission scope requested on the authorize page: `trading` (full access)
+    # or `accounts` (read-only). The app must be approved for this scope.
+    CTRADER_OAUTH_SCOPE: str = Field(default="trading")
     # When empty, the callback URI is derived from PUBLIC_BASE_URL, so a Render /
     # prod deployment only needs PUBLIC_BASE_URL set and the redirect URI stays
     # in lock-step with it (https://<host>/api/trading/live/ctid/callback).

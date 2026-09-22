@@ -89,14 +89,26 @@ def get_redirect_uri() -> str:
     return "http://localhost:8000/api/trading/live/ctid/callback"
 
 
-def build_authorize_url(*, client_id: str, state: str, redirect_uri: str | None = None) -> str:
-    """The URL the user's browser opens on cTrader to grant account access."""
+def build_authorize_url(
+    *,
+    client_id: str,
+    state: str,
+    redirect_uri: str | None = None,
+    scope: str | None = None,
+) -> str:
+    """The URL the user's browser opens on cTrader to grant account access.
+
+    Matches the documented cTrader procedure: the ``grantingaccess`` page takes
+    ``client_id``, ``redirect_uri``, a *required* ``scope`` (trading/accounts) and
+    optional ``product=web``; ``state`` is our anti-CSRF + credential handle.
+    """
     if not client_id:
         raise CTraderOAuthError("Missing client_id - create an Open API application first.")
     params = {
         "client_id": client_id,
-        "response_type": "code",
         "redirect_uri": redirect_uri or get_redirect_uri(),
+        "scope": scope or settings.CTRADER_OAUTH_SCOPE or "trading",
+        "product": "web",
         "state": state,
     }
     return f"{_authorize_url()}?{urlencode(params)}"
@@ -140,9 +152,20 @@ def consume_pending_state(state: str) -> PendingOAuth:
     return pending
 
 
+def _pick(body: dict, *keys: str) -> Any:
+    """Read a key tolerating cTrader's camelCase AND the OAuth-standard snake_case."""
+    for key in keys:
+        value = body.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
 async def _post_token(payload: dict[str, str]) -> dict[str, Any]:
+    # cTrader's token endpoint (apps/token) is queried with the grant parameters
+    # in the URL query string (GET or POST), JSON in / JSON out.
     async with httpx.AsyncClient(timeout=TOKEN_TIMEOUT_SECONDS) as client:
-        resp = await client.post(_token_url(), data=payload)
+        resp = await client.post(_token_url(), params=payload)
     if resp.status_code >= 400:
         raise CTraderOAuthError(f"cTID token endpoint {resp.status_code}: {resp.text[:200]}")
     return resp.json()
@@ -167,8 +190,10 @@ async def exchange_code(
             "redirect_uri": redirect_uri or get_redirect_uri(),
         }
     )
-    if not body.get("access_token"):
-        raise CTraderOAuthError(f"Token response missing access_token: {body.get('error', body)}")
+    if not _pick(body, "accessToken", "access_token"):
+        raise CTraderOAuthError(
+            f"Token response missing access token: {_pick(body, 'errorCode', 'description', 'error') or body}"
+        )
     return body
 
 
@@ -189,8 +214,10 @@ async def refresh_access_token(
             "client_secret": client_secret,
         }
     )
-    if not body.get("access_token"):
-        raise CTraderOAuthError(f"Refresh response missing access_token: {body.get('error', body)}")
+    if not _pick(body, "accessToken", "access_token"):
+        raise CTraderOAuthError(
+            f"Refresh response missing access token: {_pick(body, 'errorCode', 'description', 'error') or body}"
+        )
     return body
 
 
@@ -247,9 +274,9 @@ async def ensure_valid_token(session, connection) -> bool:
         logger.warning("cTID refresh failed for connection %s: %s", connection.id, exc)
         return False
 
-    new_access = body.get("access_token") or ""
-    new_refresh = body.get("refresh_token") or refresh_token
-    expires_at = expires_in_to_utc(body.get("expires_in", 3600))
+    new_access = _pick(body, "accessToken", "access_token")
+    new_refresh = _pick(body, "refreshToken", "refresh_token") or refresh_token
+    expires_at = expires_in_to_utc(_pick(body, "expiresIn", "expires_in") or 3600)
     if new_access:
         connection.access_token_enc = encrypt_secret(new_access)
     if new_refresh:
