@@ -28,6 +28,13 @@ class CTraderError(RuntimeError):
     pass
 
 
+# HTTP requests are idempotent reads on the read endpoints; cTrader's edge can
+# briefly refuse TransportError-level connections (egress/DNS flaps), so retry
+# those a couple of times before surfacing a failure.
+_CONNECT_RETRIES = 2
+_RETRY_BACKOFF_SECONDS = 1.0
+
+
 @dataclass
 class CTraderAccount:
     account_id: int
@@ -66,6 +73,7 @@ class CTraderClient:
         self._owns_client = client is None
         self.client = client or httpx.AsyncClient(
             timeout=12.0,
+            follow_redirects=True,
             headers={"User-Agent": "crypto-watchman/1.0"},
         )
         # Last payload sent; tests inspect this for dry-run assertions.
@@ -78,23 +86,47 @@ class CTraderClient:
     def _headers(self, access_token: str) -> dict:
         return {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
 
+    def _retry(self, coro_factory):
+        """Run an async request, retrying transport-level errors in place while
+        retrying nothing on HTTP-level responses (those carry broker verdicts)."""
+        import asyncio
+
+        async def run():
+            last: Exception | None = None
+            for attempt in range(_CONNECT_RETRIES + 1):
+                try:
+                    return await coro_factory()
+                except (httpx.TransportError, httpx.NetworkError) as exc:
+                    last = exc
+                    if attempt < _CONNECT_RETRIES:
+                        await asyncio.sleep(_RETRY_BACKOFF_SECONDS * (attempt + 1))
+            raise CTraderError(f"cTrader Connect unreachable: {last}") from last
+
+        return run()
+
     async def _get(self, path: str, access_token: str) -> dict:
-        resp = await self.client.get(
-            f"{self.base_url}{path}", headers=self._headers(access_token)
-        )
-        self.last_payload = CTraderPayload(url=str(resp.url))
-        if resp.status_code >= 400:
-            raise CTraderError(f"cTrader {resp.status_code}: {resp.text[:200]}")
-        return resp.json()
+        async def request():
+            resp = await self.client.get(
+                f"{self.base_url}{path}", headers=self._headers(access_token)
+            )
+            self.last_payload = CTraderPayload(url=str(resp.url))
+            if resp.status_code >= 400:
+                raise CTraderError(f"cTrader {resp.status_code}: {resp.text[:200]}")
+            return resp.json()
+
+        return await self._retry(request)
 
     async def _post(self, path: str, access_token: str, payload: dict) -> dict:
-        headers = self._headers(access_token)
-        headers["Content-Type"] = "application/json"
-        resp = await self.client.post(f"{self.base_url}{path}", headers=headers, json=payload)
-        self.last_payload = CTraderPayload(url=str(resp.url), headers=headers, json=payload)
-        if resp.status_code >= 400:
-            raise CTraderError(f"cTrader {resp.status_code}: {resp.text[:200]}")
-        return resp.json()
+        async def request():
+            headers = self._headers(access_token)
+            headers["Content-Type"] = "application/json"
+            resp = await self.client.post(f"{self.base_url}{path}", headers=headers, json=payload)
+            self.last_payload = CTraderPayload(url=str(resp.url), headers=headers, json=payload)
+            if resp.status_code >= 400:
+                raise CTraderError(f"cTrader {resp.status_code}: {resp.text[:200]}")
+            return resp.json()
+
+        return await self._retry(request)
 
     async def get_accounts(self, access_token: str) -> list[CTraderAccount]:
         data = await self._get("/getAccounts", access_token)
