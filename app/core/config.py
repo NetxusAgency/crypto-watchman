@@ -77,8 +77,12 @@ class Settings(BaseSettings):
     LIVE_MAX_POSITION_PCT: float = Field(default=10.0, ge=0.5, le=100.0)
     # Hard daily loss limit for live accounts (% of balance at day start).
     LIVE_DAILY_LOSS_LIMIT_PCT: float = Field(default=5.0, ge=0.5, le=100.0)
-    # cTrader Connect API v2 base URL.
-    CTRADER_API_BASE_URL: str = Field(default="https://connect.ctrader.com/api/v2")
+    # cTrader Open API JSON-over-WebSocket endpoints (legacy REST v2 host
+    # connect.ctrader.com is decommissioned). 5036 = JSON, wss:// required.
+    CTRADER_WS_DEMO_URL: str = Field(default="wss://demo.ctraderapi.com:5036")
+    CTRADER_WS_LIVE_URL: str = Field(default="wss://live.ctraderapi.com:5036")
+    # Per-call/request/execution wait before surfacing a timeout.
+    CTRADER_WS_TIMEOUT_SECONDS: float = Field(default=25.0, ge=5.0)
 
     # cTrader Open API OAuth (cTID). Client ID/Secret come from an Open API
     # application created at id.ctrader.com -> Open API -> Your applications.

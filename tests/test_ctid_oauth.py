@@ -315,7 +315,7 @@ class TestOAuthEndpoints:
 
         monkeypatch.setattr(oauth, "exchange_code", fake_exchange)
 
-        async def fake_accounts(self, access_token):
+        async def fake_accounts(self, access_token, *, creds=None):
             return [SimpleNamespace(account_id=10012345)]
 
         from app.execution import ctrader

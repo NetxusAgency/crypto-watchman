@@ -32,7 +32,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.database.models import BrokerConnection, LiveTrade, User
-from app.execution.ctrader import CTraderClient
+from app.execution.ctrader import CTraderClient, CTraderCredentials
 from app.services.broker import decrypt_secret
 from app.services.trading.manager import PlanManager
 from app.services.trading.strategy_engine import spec_from_definition
@@ -155,6 +155,15 @@ async def has_open_live_trade(session, connection_id: int | None, except_id: int
     return result.first() is not None
 
 
+def _connection_creds(connection: BrokerConnection | None) -> CTraderCredentials:
+    """Decrypt the Open API application credentials stored on a connection."""
+    return CTraderCredentials(
+        client_id=decrypt_secret(connection.client_id_enc or "") if connection else "",
+        client_secret=decrypt_secret(connection.client_secret_enc or "") if connection else "",
+        mode=(connection.mode or "demo") if connection else "demo",
+    )
+
+
 class LiveExecutionService:
     def __init__(self, manager: PlanManager | None = None, client: CTraderClient | None = None):
         self.manager = manager or PlanManager()
@@ -193,17 +202,27 @@ class LiveExecutionService:
 
         symbol_alias = CANDLE_PROXY.get(symbol.upper(), symbol.upper())
         access_token = decrypt_secret(connection.access_token_enc)
+        creds = _connection_creds(connection)
 
         # 1. Broker truth (balance, open positions) — dry runs still query mocked.
-        accounts = await self.client.get_accounts(access_token)
-        account_id = int(connection.account_id or (accounts[0].account_id if accounts else 0))
+        accounts = await self.client.get_accounts(access_token, creds=creds)
+        account_id = None
+        if connection and connection.account_id and str(connection.account_id).isdigit():
+            account_id = int(connection.account_id)
+        elif accounts:
+            account_id = accounts[0].account_id
+        if account_id is None or not accounts:
+            return LiveExecutionResult(
+                allowed=False,
+                reason="cTrader account not resolved — reconnect the account from the Trading tab.",
+            ), None
         equity = accounts[0].equity if accounts else 0.0
         if equity <= 0:
             return LiveExecutionResult(
                 allowed=False,
                 reason="cTrader reports zero/negative balance — refusing to trade on this account.",
             ), None
-        positions = await self.client.get_positions(access_token)
+        positions = await self.client.get_positions(access_token, creds=creds, account_id=account_id)
         open_symbols = [p.symbol.upper().replace("/", "").replace("-", "") for p in positions]
 
         # 2. Deterministic setup for the user's chosen (saved) strategy.
@@ -258,7 +277,9 @@ class LiveExecutionService:
                 risk_dict=risk_dict,
             ), None
 
-        symbol_id = await self.client.resolve_symbol_id(access_token, symbol.upper())
+        symbol_id = await self.client.resolve_symbol_id(
+            access_token, symbol.upper(), creds=creds, account_id=account_id
+        )
         if symbol_id is None:
             return LiveExecutionResult(
                 allowed=False,
@@ -464,7 +485,9 @@ class LiveExecutionService:
             )
 
         access_token = decrypt_secret(connection.access_token_enc)
-        positions = await self.client.get_positions(access_token)
+        creds = _connection_creds(connection)
+        account_id = int(connection.account_id or 0) if connection else 0
+        positions = await self.client.get_positions(access_token, creds=creds, account_id=account_id)
         if positions:
             return LiveExecutionResult(
                 allowed=False,
@@ -474,7 +497,9 @@ class LiveExecutionService:
             )
 
         # Re-resolve in case of session churn; fall back to stored plan fields.
-        symbol_id = await self.client.resolve_symbol_id(access_token, trade.symbol)
+        symbol_id = await self.client.resolve_symbol_id(
+            access_token, trade.symbol, creds=creds, account_id=account_id
+        )
         if symbol_id is None:
             return LiveExecutionResult(
                 allowed=False,
@@ -486,7 +511,8 @@ class LiveExecutionService:
         try:
             reply = await self.client.place_market_order(
                 access_token=access_token,
-                account_id=int(connection.account_id or 0),
+                creds=creds,
+                account_id=account_id,
                 symbol_id=symbol_id,
                 side=side,
                 volume=trade.quantity,
@@ -545,8 +571,14 @@ class LiveExecutionService:
             )
             return 0
         access_token = decrypt_secret(connection.access_token_enc)
+        creds = _connection_creds(connection)
+        account_id = 0
+        if connection.account_id and str(connection.account_id).isdigit():
+            account_id = int(connection.account_id)
         try:
-            positions = await self.client.get_positions(access_token)
+            if not account_id:
+                raise CTraderError("connection has no numeric cTrader account id")
+            positions = await self.client.get_positions(access_token, creds=creds, account_id=account_id)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"sync_closed: could not read positions for connection {connection.id}: {e}")
             return 0

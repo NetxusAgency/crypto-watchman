@@ -602,7 +602,7 @@ async def ctid_oauth_callback(
         exchange_code,
     )
     from app.services.broker import decrypt_secret, encrypt_secret
-    from app.execution.ctrader import CTraderClient
+    from app.execution.ctrader import CTraderClient, CTraderCredentials
 
     params = dict(request.query_params)
     redirect_base = settings.PUBLIC_BASE_URL.rstrip("/")
@@ -636,7 +636,12 @@ async def ctid_oauth_callback(
     client = CTraderClient()
     account_id = ""
     try:
-        accounts = await client.get_accounts(access_token)
+        creds = CTraderCredentials(
+            client_id=client_id,
+            client_secret=client_secret,
+            mode=(pending.mode or "demo"),
+        )
+        accounts = await client.get_accounts(access_token, creds=creds)
         if accounts:
             account_id = str(accounts[0].account_id)
     except Exception as exc:  # noqa: BLE001

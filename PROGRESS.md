@@ -395,3 +395,31 @@ deviating from the official cTrader OAuth contract (help.ctrader.com/open-api/ac
 - Full suite: **226 passed in ~50s**.
 - Committing + pushing this slice to github.com/NetxusAgency/crypto-watchman.git (see latest commit).
 
+## 2H.4 - Migrate broker client from dead REST to JSON-over-WebSocket.
+
+The cTrader REST API v2 host (`connect.ctrader.com/api/v2`) now refuses connections globally
+(ConnectionRefusedError probed from multiple networks), so all broker reads/orders were dead.
+Rewrote `app/execution/ctrader.py` to speak the official Open API JSON wire protocol over WSS.
+- **Transport**: `wss://demo.ctraderapi.com:5036` (demo) / `wss://live.ctraderapi.com:5036`
+  (live); envelope `{clientMsgId, payloadType, payload}`, correlation by clientMsgId
+  (clientOrderId fallback for execution events).
+- **Handshake**: best-effort version req (2104) then application auth (2100) with the stored
+  Open API Client ID/Secret; account-scoped calls auth per account (2102) with the access token.
+- **Operations** (payload types verified from spotware/openapi-proto-messages + docs):
+  get_accounts (2149 → 2121/2122 trader res; balance fixed-point /10^moneyDigits),
+  get_positions (2124 reconcile; symbol ids resolved via 2114 symbols list, cached per account),
+  resolve_symbol_id, place_market_order (2106 MARKET → wait terminal execution event 2126;
+  stopLoss/takeProfit are NOT supported on MARKET orders per docs, so SL/TP is attached right
+  after fill via 2110 AmendPositionSLTPReq; if that fails the position is auto-closed),
+  close_position (2111).
+- **Heartbeat**: idle connections send ProtoHeartbeatEvent (51) ~every 9s while awaiting events.
+- Callers updated to pass decrypted Client ID/Secret (`CTraderCredentials`) + numeric
+  account id: `live.py` (`_connection_creds`, all call sites) and the cTID OAuth callback
+  (account discovery). Config: `CTRADER_WS_DEMO_URL`/`CTRADER_WS_LIVE_URL`/`CTRADER_WS_TIMEOUT_SECONDS`
+  replace the retired `CTRADER_API_BASE_URL`.
+- Added `websockets>=12.0` + `pytest.ini` (asyncio_mode=auto) + `pytest-asyncio` for async tests.
+- New `tests/test_ctrader_ws.py` (8 tests): scripted fake WebSocket frames covering accounts
+  parse, timeout & auth-failure, positions+symbol resolution, market order→SLTP amend payload
+  shape, order-reject error, close-with-auto-volume. Full suite: **234 passed in ~57s** (was 226).
+- Committing + pushing this slice to github.com/NetxusAgency/crypto-watchman.git (see latest commit).
+
