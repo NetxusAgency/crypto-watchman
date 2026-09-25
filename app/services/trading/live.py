@@ -191,6 +191,17 @@ class LiveExecutionService:
             return {"allowed": True, "account_id": accounts[0].account_id}
         if stored_num is not None and stored_num in seen:
             return {"allowed": True, "account_id": stored_num}
+        if accounts and len(accounts) == 1:
+            fresh = accounts[0].account_id
+            logger.warning(
+                "stored cTrader account %s is gone; this token now exposes exactly one "
+                "account (%s) — adopting it unconditionally",
+                stored_raw,
+                fresh,
+            )
+            if connection is not None:
+                connection.account_id = str(fresh)
+            return {"allowed": True, "account_id": fresh, "updated": True}
         if accounts:
             return {
                 "allowed": False,
@@ -277,6 +288,8 @@ class LiveExecutionService:
         resolution = await self._resolve_account_id(connection, accounts, creds, access_token)
         if not resolution["allowed"]:
             return LiveExecutionResult(allowed=False, reason=resolution["reason"]), None
+        if resolution.get("updated") and connection is not None:
+            await session.flush()
         account_id = resolution["account_id"]
         chosen = next((a for a in accounts if a.account_id == account_id), accounts[0])
         equity = chosen.equity

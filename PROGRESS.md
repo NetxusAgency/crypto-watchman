@@ -438,6 +438,9 @@ demo/live mismatch). Changes:
   reports a definitive demo-vs-live mismatch message.
 - Step tags on broker errors (`accounts`/`positions`/`symbol`) so future failures identify the
   exact WS call. `confirm_trade` guards a missing/mismatched account id.
-- Expected user fix: reconnect the account from the Trading tab with the mode matching where
+- Self-heal: when the stored account id no longer exists but the token exposes EXACTLY ONE
+  account (e.g. Spotware re-issued the demo account as 5920112), the flow adopts that account
+  and persists the corrected id automatically instead of blocking.
+- Expected user fix (older behavior): reconnect the account from the Trading tab with the mode matching where
   account 12339252 actually lives, or delete the stale connection.
 
