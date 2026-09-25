@@ -32,7 +32,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.database.models import BrokerConnection, LiveTrade, User
-from app.execution.ctrader import CTraderClient, CTraderCredentials
+from app.execution.ctrader import CTraderClient, CTraderCredentials, CTraderError
 from app.services.broker import decrypt_secret
 from app.services.trading.manager import PlanManager
 from app.services.trading.strategy_engine import spec_from_definition
@@ -169,6 +169,71 @@ class LiveExecutionService:
         self.manager = manager or PlanManager()
         self.client = client or CTraderClient()
 
+    async def _resolve_account_id(
+        self,
+        connection: BrokerConnection | None,
+        accounts: list,
+        creds: CTraderCredentials,
+        access_token: str,
+    ) -> dict:
+        """Pick the account to trade, or explain why none can be used.
+
+        Prefers the numeric account id stored on the connection when the current
+        token can still reach it. Never silently swaps to a different account —
+        a stored-vs-token mismatch means the connection is stale or demo/live
+        hosts are mixed up, and the reason returned tells the user exactly that.
+        """
+        seen = {a.account_id for a in accounts}
+        stored_raw = str(connection.account_id or "") if connection else ""
+        stored_num = int(stored_raw) if stored_raw.isdigit() else None
+
+        if accounts and stored_num is None:
+            return {"allowed": True, "account_id": accounts[0].account_id}
+        if stored_num is not None and stored_num in seen:
+            return {"allowed": True, "account_id": stored_num}
+        if accounts:
+            return {
+                "allowed": False,
+                "reason": (
+                    f"cTrader cannot reach the stored account {stored_raw!r} with this "
+                    f"connection (mode={creds.mode}). This token can reach these accounts: "
+                    f"{', '.join(str(a.account_id) for a in sorted(seen, key=lambda a: a.account_id))}. "
+                    f"Either the connection is stale, or this account is on the other "
+                    f"(demo/live) environment — reconnect from the Trading tab choosing the "
+                    f"matching account mode."
+                ),
+            }
+
+        other_mode = "live" if (creds.mode or "demo") != "live" else "demo"
+        found_elsewhere: list = []
+        try:
+            other_creds = CTraderCredentials(
+                client_id=creds.client_id,
+                client_secret=creds.client_secret,
+                mode=other_mode,
+            )
+            found_elsewhere = await self.client.get_accounts(access_token, creds=other_creds)
+        except CTraderError as exc:
+            logger.warning("_resolve_account_id: probe on %s host failed: %s", other_mode, exc)
+        if found_elsewhere:
+            return {
+                "allowed": False,
+                "reason": (
+                    f"No accounts are reachable on the {creds.mode} environment for this "
+                    f"token, but this Open API app CAN reach accounts on the {other_mode} "
+                    f"environment ({', '.join(str(a.account_id) for a in found_elsewhere)}). "
+                    f"The connection is set to {creds.mode} — reconnect from the Trading tab "
+                    f"choosing the {other_mode} account mode."
+                ),
+            }
+        return {
+            "allowed": False,
+            "reason": (
+                "cTrader returned no accounts for this token. Reconnect the account from "
+                "the Trading tab (Connect with cTID) to issue a fresh grant."
+            ),
+        }
+
     async def _build_proposal(
         self,
         session,
@@ -205,24 +270,25 @@ class LiveExecutionService:
         creds = _connection_creds(connection)
 
         # 1. Broker truth (balance, open positions) — dry runs still query mocked.
-        accounts = await self.client.get_accounts(access_token, creds=creds)
-        account_id = None
-        if connection and connection.account_id and str(connection.account_id).isdigit():
-            account_id = int(connection.account_id)
-        elif accounts:
-            account_id = accounts[0].account_id
-        if account_id is None or not accounts:
-            return LiveExecutionResult(
-                allowed=False,
-                reason="cTrader account not resolved — reconnect the account from the Trading tab.",
-            ), None
-        equity = accounts[0].equity if accounts else 0.0
+        try:
+            accounts = await self.client.get_accounts(access_token, creds=creds)
+        except CTraderError as exc:
+            raise CTraderError(f"broker step 'accounts': {exc}") from exc
+        resolution = await self._resolve_account_id(connection, accounts, creds, access_token)
+        if not resolution["allowed"]:
+            return LiveExecutionResult(allowed=False, reason=resolution["reason"]), None
+        account_id = resolution["account_id"]
+        chosen = next((a for a in accounts if a.account_id == account_id), accounts[0])
+        equity = chosen.equity
         if equity <= 0:
             return LiveExecutionResult(
                 allowed=False,
                 reason="cTrader reports zero/negative balance — refusing to trade on this account.",
             ), None
-        positions = await self.client.get_positions(access_token, creds=creds, account_id=account_id)
+        try:
+            positions = await self.client.get_positions(access_token, creds=creds, account_id=account_id)
+        except CTraderError as exc:
+            raise CTraderError(f"broker step 'positions': {exc}") from exc
         open_symbols = [p.symbol.upper().replace("/", "").replace("-", "") for p in positions]
 
         # 2. Deterministic setup for the user's chosen (saved) strategy.
@@ -277,9 +343,12 @@ class LiveExecutionService:
                 risk_dict=risk_dict,
             ), None
 
-        symbol_id = await self.client.resolve_symbol_id(
-            access_token, symbol.upper(), creds=creds, account_id=account_id
-        )
+        try:
+            symbol_id = await self.client.resolve_symbol_id(
+                access_token, symbol.upper(), creds=creds, account_id=account_id
+            )
+        except CTraderError as exc:
+            raise CTraderError(f"broker step 'symbol': {exc}") from exc
         if symbol_id is None:
             return LiveExecutionResult(
                 allowed=False,
@@ -487,7 +556,16 @@ class LiveExecutionService:
         access_token = decrypt_secret(connection.access_token_enc)
         creds = _connection_creds(connection)
         account_id = int(connection.account_id or 0) if connection else 0
-        positions = await self.client.get_positions(access_token, creds=creds, account_id=account_id)
+        if not account_id:
+            return LiveExecutionResult(
+                allowed=False,
+                reason="cTrader account id is missing on this connection — reconnect from the Trading tab.",
+                trade=trade,
+            )
+        try:
+            positions = await self.client.get_positions(access_token, creds=creds, account_id=account_id)
+        except CTraderError as exc:
+            raise CTraderError(f"broker step 'positions': {exc}") from exc
         if positions:
             return LiveExecutionResult(
                 allowed=False,
@@ -497,9 +575,12 @@ class LiveExecutionService:
             )
 
         # Re-resolve in case of session churn; fall back to stored plan fields.
-        symbol_id = await self.client.resolve_symbol_id(
-            access_token, trade.symbol, creds=creds, account_id=account_id
-        )
+        try:
+            symbol_id = await self.client.resolve_symbol_id(
+                access_token, trade.symbol, creds=creds, account_id=account_id
+            )
+        except CTraderError as exc:
+            raise CTraderError(f"broker step 'symbol': {exc}") from exc
         if symbol_id is None:
             return LiveExecutionResult(
                 allowed=False,

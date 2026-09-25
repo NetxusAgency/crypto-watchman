@@ -368,20 +368,29 @@ class CTraderClient:
                 account_id = int(acc.get("ctidTraderAccountId") or 0)
                 if not account_id:
                     continue
-                await self._request(
-                    ws,
-                    PT_ACCOUNT_AUTH_REQ,
-                    {"ctidTraderAccountId": account_id, "accessToken": access_token},
-                    expect={PT_ACCOUNT_AUTH_RES},
-                    timeout=self._timeout,
-                )
-                trader_res = await self._request(
-                    ws,
-                    PT_TRADER_REQ,
-                    {"ctidTraderAccountId": account_id},
-                    expect={PT_TRADER_RES},
-                    timeout=self._timeout,
-                )
+                try:
+                    await self._request(
+                        ws,
+                        PT_ACCOUNT_AUTH_REQ,
+                        {"ctidTraderAccountId": account_id, "accessToken": access_token},
+                        expect={PT_ACCOUNT_AUTH_RES},
+                        timeout=self._timeout,
+                    )
+                    trader_res = await self._request(
+                        ws,
+                        PT_TRADER_REQ,
+                        {"ctidTraderAccountId": account_id},
+                        expect={PT_TRADER_RES},
+                        timeout=self._timeout,
+                    )
+                except CTraderError as exc:
+                    logger.warning(
+                        "get_accounts: account %s not usable on the %s host (%s); skipping",
+                        account_id,
+                        creds.mode,
+                        exc,
+                    )
+                    continue
                 trader = (trader_res.get("payload") or {}).get("trader") or {}
                 digits = int(trader.get("moneyDigits") or 2)
                 balance = float(trader.get("balance") or 0) / (10 ** digits)

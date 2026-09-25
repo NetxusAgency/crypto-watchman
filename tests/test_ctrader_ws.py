@@ -96,6 +96,30 @@ class TestGetAccounts:
         assert _sent_frame(2149)["payload"]["accessToken"] == "TOK"
         assert _sent_frame(2121)["payload"]["ctidTraderAccountId"] == 10012345
 
+    async def test_skips_accounts_that_fail_auth(self, monkeypatch):
+        script = [
+            _version(),
+            _frame(2101, {}),
+            _frame(
+                2150,
+                {"accessToken": "TOK", "ctidTraderAccount": [
+                    {"ctidTraderAccountId": 999},
+                    {"ctidTraderAccountId": 10012345},
+                ]},
+            ),
+            # account 999 is unreachable on this host (e.g. demo/live mismatch)
+            _frame(2142, {"errorCode": "CH_CTID_TRADER_ACCOUNT_NOT_FOUND", "description": "nope"}),
+            _frame(2103, {"ctidTraderAccountId": 10012345}),
+            _frame(
+                2122,
+                {"ctidTraderAccountId": 10012345, "trader": {"balance": 50000, "moneyDigits": 2}},
+            ),
+        ]
+        client = _client(monkeypatch, script)
+        accounts = await client.get_accounts("TOK", creds=CREDS)
+        assert [a.account_id for a in accounts] == [10012345]
+        assert abs(accounts[0].balance - 500.0) < 1e-9
+
     async def test_timeout_raises(self, monkeypatch):
         script = [_version(), _frame(2101, {})]
         client = _client(monkeypatch, script, timeout=0.6)

@@ -423,3 +423,21 @@ Rewrote `app/execution/ctrader.py` to speak the official Open API JSON wire prot
   shape, order-reject error, close-with-auto-volume. Full suite: **234 passed in ~57s** (was 226).
 - Committing + pushing this slice to github.com/NetxusAgency/crypto-watchman.git (see latest commit).
 
+## 2H.5 — CH_CTID_TRADER_ACCOUNT_NOT_FOUND diagnosis + account reconciliation
+
+Live test surfaced: `propose_trade error: CTraderError: CH_CTID_TRADER_ACCOUNT_NOT_FOUND (id=12339252)` —
+meaning account auth (2102) for the stored account id fails on the connection's mode host (stale or
+demo/live mismatch). Changes:
+
+- `get_accounts` no longer fails the whole listing when one account is unreachable; it skips
+  that account (log warning) and returns the reachable ones (test: 235 total).
+- New `LiveExecutionService._resolve_account_id`: prefers the stored numeric account id when the
+  token can still reach it; if the stored id is absent from the token's accounts it returns a
+  blocking reason listing the reachable account ids (never silently trades a different account);
+  if no accounts at all on the configured mode, it probes the OPPOSITE (demo/live) host and
+  reports a definitive demo-vs-live mismatch message.
+- Step tags on broker errors (`accounts`/`positions`/`symbol`) so future failures identify the
+  exact WS call. `confirm_trade` guards a missing/mismatched account id.
+- Expected user fix: reconnect the account from the Trading tab with the mode matching where
+  account 12339252 actually lives, or delete the stale connection.
+
