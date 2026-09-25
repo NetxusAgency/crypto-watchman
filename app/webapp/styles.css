@@ -177,13 +177,22 @@ body {
 .spacer { height: 14px; }
 
 .error {
-  background: rgba(245,73,107,.12);
-  border: 1px solid rgba(245,73,107,.5);
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  z-index: 60;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: rgba(245,73,107,.14);
+  border: 1px solid rgba(245,73,107,.6);
   color: var(--red);
   border-radius: 10px;
   padding: 10px 12px;
-  margin-bottom: 12px;
   font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  box-shadow: 0 4px 18px rgba(0,0,0,.45);
 }
 
 @media (prefers-color-scheme: light) {

@@ -37,11 +37,18 @@
     return `<div class="row">${children}</div>`;
   }
 
+  let _errTimer = null;
   function showError(msg) {
     const el = $("#errorBox");
+    if (_errTimer) {
+      clearTimeout(_errTimer);
+      _errTimer = null;
+    }
     if (msg) {
       el.textContent = msg;
       el.classList.remove("hidden");
+      el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      _errTimer = setTimeout(() => el.classList.add("hidden"), 8000);
     } else {
       el.classList.add("hidden");
     }
