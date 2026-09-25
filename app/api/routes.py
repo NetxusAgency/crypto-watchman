@@ -728,17 +728,24 @@ async def execute_live_trade(
 
     strategy_key = payload.strategy_key or "momentum"
     service = LiveExecutionService()
-    result = await service.propose_trade(
-        session,
-        user=user,
-        connection=connection,
-        symbol=symbol,
-        strategy_key=strategy_key,
-        strategy_name=payload.strategy_name or strategy_key,
-        dry_run=dry_run,
-        kline_source=kline_fetcher,
-        notify=not dry_run,
-    )
+    try:
+        result = await service.propose_trade(
+            session,
+            user=user,
+            connection=connection,
+            symbol=symbol,
+            strategy_key=strategy_key,
+            strategy_name=payload.strategy_name or strategy_key,
+            dry_run=dry_run,
+            kline_source=kline_fetcher,
+            notify=not dry_run,
+        )
+    except Exception as exc:  # surface readable 500s instead of opaque failures
+        logger.exception("execute_live_trade: propose_trade failed")
+        raise HTTPException(
+            status_code=500,
+            detail=f"propose_trade error: {type(exc).__name__}: {exc}",
+        ) from exc
     return {
         "allowed": result.allowed,
         "reason": result.reason,
