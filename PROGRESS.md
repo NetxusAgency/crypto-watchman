@@ -459,6 +459,19 @@ button and a broker order possibly already placed.
   logged failures.
 - Timeout message tells the user to check cTrader, because the order may have
   gone through even if our WS wait died.
+
+## 2H.7 — Fill-timeout on confirm was a closed weekend market, not a code bug
+
+The 2106 order request WAS sent; the broker accepted it but sent no FILLED-event
+within 25s. Saturday = EURUSD market closed on cTrader demo; a market order can
+legitimately sit accepted until the market reopens. Improvements:
+
+- `_request_execution` now records the payload types/executionType it actually
+  saw before timing out and includes them in the error, e.g.
+  `(received: 2126:2)` = only ORDER_ACCEPTED → confirms "accepted, waiting".
+- `confirm_trade` special-cases `no execution result` timeouts with a clear demo/
+  weekend message (check positions in cTrader) instead of a misleading
+  "Broker rejected the order".
 - Expected user fix (older behavior): reconnect the account from the Trading tab with the mode matching where
   account 12339252 actually lives, or delete the stale connection.
 

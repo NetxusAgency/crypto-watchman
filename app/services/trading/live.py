@@ -614,6 +614,24 @@ class LiveExecutionService:
                 take_profit=float(trade.take_profit_1) if trade.take_profit_1 else None,
             )
             order_id = reply.order_id or trade.plan_id
+        except CTraderError as e:
+            logger.warning(f"cTrader order failed on confirm: {e}")
+            if "no execution result" in str(e):
+                return LiveExecutionResult(
+                    allowed=False,
+                    reason=(
+                        "The broker received the order but sent no fill event in time. On demo "
+                        "forex over the weekend the market is usually closed, so the order can "
+                        "sit accepted until it can execute — check your open/pending positions in "
+                        f"cTrader. (Broker said: {e})"
+                    ),
+                    trade=trade,
+                )
+            return LiveExecutionResult(
+                allowed=False,
+                reason=f"Broker rejected the order: {e}",
+                trade=trade,
+            )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"cTrader order failed on confirm: {e}")
             return LiveExecutionResult(

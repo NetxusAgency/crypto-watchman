@@ -316,11 +316,14 @@ class CTraderClient:
         await self._send(ws, payload_type, payload, msg_id)
         deadline = time.monotonic() + timeout
         last_heartbeat = time.monotonic()
+        seen_events: list[str] = []
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                seen_txt = ", ".join(seen_events) or "none"
                 raise CTraderError(
-                    f"cTrader timeout: no execution result for {payload_type} within {timeout:g}s"
+                    f"cTrader timeout: no execution result for {payload_type} within {timeout:g}s "
+                    f"(received: {seen_txt}) — the order may still be pending on the broker"
                 )
             if time.monotonic() - last_heartbeat >= _HEARTBEAT_INTERVAL_SECONDS:
                 last_heartbeat = time.monotonic()
@@ -332,10 +335,12 @@ class CTraderClient:
                 frame = await self._recv(ws, min(remaining, _HEARTBEAT_INTERVAL_SECONDS))
             except asyncio.TimeoutError:
                 continue
-            if not self._matches(frame, msg_id, client_order_id):
-                continue
             pt = frame.get("payloadType")
             body = frame.get("payload") or {}
+            if pt != PT_HEARTBEAT_EVENT:
+                seen_events.append(f"{pt}:{body.get('executionType') or '-'}")
+            if not self._matches(frame, msg_id, client_order_id):
+                continue
             if pt in _ERROR_PAYLOAD_TYPES:
                 raise CTraderError(_format_error(frame))
             if pt != PT_EXECUTION_EVENT:
