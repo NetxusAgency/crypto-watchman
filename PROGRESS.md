@@ -441,6 +441,24 @@ demo/live mismatch). Changes:
 - Self-heal: when the stored account id no longer exists but the token exposes EXACTLY ONE
   account (e.g. Spotware re-issued the demo account as 5920112), the flow adopts that account
   and persists the corrected id automatically instead of blocking.
+
+## 2H.6 — Confirm tap produced no visible result (Telegram callback robustness)
+
+The proposal message rendered fine, but tapping ✅ produced no reply at all. The
+callback handler only answered Telegram AFTER all broker work finished (up to
+~50s across sequential WS round-trips), the user lookup sat OUTSIDE the
+try/except (any DB hiccup = unhandled = aiogram swallows it, no answer), and the
+finally-edited message could fail silently. The user was left with a spinning
+button and a broker order possibly already placed.
+
+- `app/bot/handlers/live.py` rewritten: `callback.answer("⏳ Working…")` fires
+  immediately, broker work runs under `asyncio.wait_for(..., 45s)`, and every
+  outcome (success / blocked / error / timeout) is reported by re-editing the
+  proposal message — with a fallback to a brand-new message if the edit fails.
+  Both the user lookup and the decision now live inside guarded paths with
+  logged failures.
+- Timeout message tells the user to check cTrader, because the order may have
+  gone through even if our WS wait died.
 - Expected user fix (older behavior): reconnect the account from the Trading tab with the mode matching where
   account 12339252 actually lives, or delete the stale connection.
 
