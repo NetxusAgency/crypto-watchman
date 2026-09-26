@@ -267,3 +267,49 @@ class TestClosePosition:
         client = _client(monkeypatch, script)
         await client.close_position("TOK", creds=CREDS, account_id=123, position_id="77")
         assert _sent_frame(2111)["payload"] == {"ctidTraderAccountId": 123, "positionId": 77, "volume": 50}
+
+
+class TestPendingOrders:
+    async def test_lists_working_orders(self, monkeypatch):
+        script = [
+            _version(), _frame(2101, {}), _frame(2103, {"ctidTraderAccountId": 123}),
+            _frame(
+                2125,
+                {"ctidTraderAccountId": 123, "order": [
+                    {"orderId": 4040, "symbolId": 111, "volume": 250, "tradeSide": 1,
+                     "clientOrderId": "cw-x", "positionId": 0},
+                    {"orderId": 4050, "positionId": 77},
+                ]},
+            ),
+        ]
+        client = _client(monkeypatch, script)
+        orders = await client.get_pending_orders("TOK", creds=CREDS, account_id=123)
+        assert [o["order_id"] for o in orders] == [4040, 4050]
+        assert orders[0]["volume"] == 2.5
+        assert orders[0]["side"] == "Buy"
+        assert orders[0]["position_id"] == 0
+        assert orders[1]["position_id"] == 77
+
+
+class TestCancelOrder:
+    async def test_cancels_pending_order(self, monkeypatch):
+        # Events may carry no clientMsgId; correlation must work via orderId.
+        script = [
+            _version(), _frame(2101, {}), _frame(2103, {"ctidTraderAccountId": 123}),
+            _frame(2126, {"ctidTraderAccountId": 123, "executionType": 5,
+                          "order": {"orderId": 4040}}, echo=False),
+        ]
+        client = _client(monkeypatch, script)
+        await client.cancel_order("TOK", creds=CREDS, account_id=123, order_id=4040)
+        assert _sent_frame(2108)["payload"] == {"ctidTraderAccountId": 123, "orderId": 4040}
+
+    async def test_cancel_rejected_raises(self, monkeypatch):
+        script = [
+            _version(), _frame(2101, {}), _frame(2103, {"ctidTraderAccountId": 123}),
+            _frame(2126, {"ctidTraderAccountId": 123, "executionType": 8,
+                          "order": {"orderId": 4040},
+                          "description": "already filled"}, echo=False),
+        ]
+        client = _client(monkeypatch, script)
+        with pytest.raises(CTraderError, match="rejected"):
+            await client.cancel_order("TOK", creds=CREDS, account_id=123, order_id=4040)

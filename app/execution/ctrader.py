@@ -71,6 +71,7 @@ PT_ACCOUNT_AUTH_RES = 2103
 PT_VERSION_REQ = 2104
 PT_VERSION_RES = 2105
 PT_NEW_ORDER_REQ = 2106
+PT_CANCEL_ORDER_REQ = 2108
 PT_AMEND_POSITION_SLTP_REQ = 2110
 PT_CLOSE_POSITION_REQ = 2111
 PT_SYMBOLS_LIST_REQ = 2114
@@ -80,6 +81,7 @@ PT_TRADER_RES = 2122
 PT_RECONCILE_REQ = 2124
 PT_RECONCILE_RES = 2125
 PT_EXECUTION_EVENT = 2126
+PT_ORDER_ERROR_EVENT = 2132
 PT_ERROR_RES = 2142
 PT_GET_ACCOUNTS_BY_ACCESS_TOKEN_REQ = 2149
 PT_GET_ACCOUNTS_BY_ACCESS_TOKEN_RES = 2150
@@ -98,13 +100,16 @@ EXEC_ORDER_REPLACED = 4
 EXEC_ORDER_CANCELLED = 5
 EXEC_ORDER_EXPIRED = 6
 EXEC_ORDER_REJECTED = 7
+EXEC_ORDER_CANCEL_REJECTED = 8
 
 _ORDER_FILL_OK = {EXEC_ORDER_FILLED}
 _ORDER_FILL_FAIL = {EXEC_ORDER_REJECTED, EXEC_ORDER_CANCELLED, EXEC_ORDER_EXPIRED}
 _AMEND_OK = {EXEC_ORDER_FILLED, EXEC_ORDER_REPLACED}
 _AMEND_FAIL = {EXEC_ORDER_REJECTED, EXEC_ORDER_CANCELLED, EXEC_ORDER_EXPIRED}
+_CANCEL_OK = {EXEC_ORDER_CANCELLED}
+_CANCEL_FAIL = {EXEC_ORDER_FILLED, EXEC_ORDER_REJECTED, EXEC_ORDER_EXPIRED, EXEC_ORDER_CANCEL_REJECTED}
 
-_ERROR_PAYLOAD_TYPES = frozenset({PT_ERROR_RES, PT_ERROR_RES_COMMON})
+_ERROR_PAYLOAD_TYPES = frozenset({PT_ERROR_RES, PT_ERROR_RES_COMMON, PT_ORDER_ERROR_EVENT})
 
 # How long between client heartbeats while an order waits for its execution
 # event. The docs ask to keep sending one every 10s on an idle connection.
@@ -258,13 +263,16 @@ class CTraderClient:
         return json.loads(raw)
 
     @staticmethod
-    def _matches(frame: dict, msg_id: str, client_order_id: str | None) -> bool:
+    def _matches(frame: dict, msg_id: str, client_order_id: str | None,
+                 order_id: int | None = None) -> bool:
         if frame.get("clientMsgId") == msg_id:
             return True
-        if not client_order_id:
-            return False
         order = (frame.get("payload") or {}).get("order") or {}
-        return str(order.get("clientOrderId") or "") == str(client_order_id)
+        if client_order_id is not None and str(order.get("clientOrderId") or "") == str(client_order_id):
+            return True
+        if order_id is not None and str(order.get("orderId") or "") == str(order_id):
+            return True
+        return False
 
     async def _request(self, ws, payload_type: int, payload: dict, *, expect: set[int],
                        timeout: float) -> dict:
@@ -304,6 +312,7 @@ class CTraderClient:
         fail_types: set[int],
         timeout: float | None = None,
         client_order_id: str | None = None,
+        order_id: int | None = None,
     ) -> dict:
         """Send a trading request and wait for its terminal execution event.
 
@@ -339,7 +348,7 @@ class CTraderClient:
             body = frame.get("payload") or {}
             if pt != PT_HEARTBEAT_EVENT:
                 seen_events.append(f"{pt}:{body.get('executionType') or '-'}")
-            if not self._matches(frame, msg_id, client_order_id):
+            if not self._matches(frame, msg_id, client_order_id, order_id):
                 continue
             if pt in _ERROR_PAYLOAD_TYPES:
                 raise CTraderError(_format_error(frame))
@@ -581,6 +590,61 @@ class CTraderClient:
                 },
                 ok_types=_ORDER_FILL_OK,
                 fail_types=_ORDER_FILL_FAIL,
+            )
+
+    async def get_pending_orders(
+        self, access_token: str, *, creds: CTraderCredentials, account_id: int
+    ) -> list[dict]:
+        """Working (not yet filled) orders from a reconcile.
+
+        Each dict: order_id, client_order_id, symbol_id, volume (units), side,
+        position_id. position_id == 0 means a standalone pending order (a market
+        order waiting on a closed market, limit/stop orders, ...). position_id
+        != 0 means a protective order attached to an open position.
+        """
+        account_id = int(account_id)
+        async with self._session(creds, access_token=access_token, account_id=account_id) as ws:
+            resp = await self._request(
+                ws,
+                PT_RECONCILE_REQ,
+                {"ctidTraderAccountId": account_id},
+                expect={PT_RECONCILE_RES},
+                timeout=self._timeout,
+            )
+        orders: list[dict] = []
+        for raw in (resp.get("payload") or {}).get("order", []) or []:
+            try:
+                order_id = int(raw.get("orderId") or 0)
+                if not order_id:
+                    continue
+                orders.append(
+                    {
+                        "order_id": order_id,
+                        "client_order_id": str(raw.get("clientOrderId") or ""),
+                        "symbol_id": int(raw.get("symbolId") or 0),
+                        "volume": float(raw.get("volume") or 0) / 100.0,
+                        "side": "Buy" if int(raw.get("tradeSide") or 0) == TRADE_SIDE_BUY else "Sell",
+                        "position_id": int(raw.get("positionId") or 0),
+                    }
+                )
+            except (TypeError, ValueError):
+                continue
+        return orders
+
+    async def cancel_order(
+        self, access_token: str, *, creds: CTraderCredentials, account_id: int, order_id: int
+    ) -> None:
+        """Cancel a pending order (ProtoOACancelOrderReq, 2108)."""
+        account_id = int(account_id)
+        async with self._session(creds, access_token=access_token, account_id=account_id) as ws:
+            await self._request_execution(
+                ws,
+                PT_CANCEL_ORDER_REQ,
+                {"ctidTraderAccountId": account_id, "orderId": int(order_id)},
+                ok_types=_CANCEL_OK,
+                fail_types=_CANCEL_FAIL,
+                timeout=20.0,
+                order_id=int(order_id),
             )
 
     async def _position_volume(

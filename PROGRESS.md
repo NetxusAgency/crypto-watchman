@@ -472,6 +472,26 @@ legitimately sit accepted until the market reopens. Improvements:
 - `confirm_trade` special-cases `no execution result` timeouts with a clear demo/
   weekend message (check positions in cTrader) instead of a misleading
   "Broker rejected the order".
+
+## 2H.8 — Cancelling an order already sent to the broker
+
+New `/cancel_live` Telegram command: cancels a market/limit order that already
+reached cTrader and is stuck ACCEPTED (e.g. weekend-closed forex market), and
+closes any open position matching one of the user's live trades. Generic
+matching, not just the app's own rows:
+
+- Client additions: `ProtoOACancelOrderReq` (2108) with success
+  `ORDER_CANCELLED` (5) / failure including `ORDER_CANCEL_REJECTED` (8) and the
+  `ProtoOAOrderErrorEvent` (2132) now treated as an error; `get_pending_orders`
+  lists working orders from reconcile (positionId == 0 = standalone pending).
+- Correlation fallback extended to match execution events by `order.orderId`,
+  since events may carry no clientMsgId.
+- `LiveExecutionService.cancel_live(session, user)`: resolves the latest live
+  trade's connection, cancels all standalone pending orders, closes matching
+  positions, marks PENDING_CONFIRM/PLACED rows CLOSED, and reports per-order
+  outcome. Handler `/cancel_live` added to `base.py`.
+- Tests: +3 (pending-orders list, cancel ok via orderId correlation, cancel-
+  rejected raises). Total **238 passed**.
 - Expected user fix (older behavior): reconnect the account from the Trading tab with the mode matching where
   account 12339252 actually lives, or delete the stale connection.
 

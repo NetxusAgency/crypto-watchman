@@ -46,6 +46,38 @@ async def cmd_login(message: Message):
             "Mini App and try again."
         )
 
+@router.message(Command("cancel_live"))
+async def cmd_cancel_live(message: Message, session: AsyncSession):
+    """Cancel the order already sent to cTrader for the latest live trade."""
+    from html import escape
+
+    from app.services.trading.live import LiveExecutionService
+
+    user = await db_service.get_or_create_user(
+        session=session,
+        telegram_id=message.from_user.id,
+        username=message.from_user.username,
+    )
+    status = await message.answer("⏳ Contacting cTrader to cancel your live trade…")
+    try:
+        result = await LiveExecutionService().cancel_live(session, user=user)
+    except Exception as e:  # noqa: BLE001
+        await status.edit_text(
+            f"⚠️ <b>Could not cancel</b>\n\n<code>{escape(str(e))}</code>",
+            parse_mode="HTML",
+        )
+        return
+    icon = "✅" if result.allowed else "⛔"
+    await status.edit_text(
+        f"{icon} <b>Cancel live trade</b>\n\n{escape(str(result.reason))}",
+        parse_mode="HTML",
+    )
+    await message.answer(
+        "📋 Tip: you can also cancel it directly in the cTrader app "
+        "(Trading tab → pending order → cancel)."
+    )
+
+
 @router.message(Command("help"))
 async def cmd_help(message: Message):
     """Handler for /help command."""

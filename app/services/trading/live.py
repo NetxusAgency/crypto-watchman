@@ -669,6 +669,120 @@ class LiveExecutionService:
         logger.info(f"Rejected live trade {trade.plan_id}")
         return LiveExecutionResult(allowed=True, reason="Trade declined — nothing placed.", trade=trade)
 
+    async def cancel_live(self, session, *, user: User) -> LiveExecutionResult:
+        """Cancel the user's latest live broker order(s) and matching position(s).
+
+        Aimed at "cancel an order I already sent to the broker" (e.g. a market
+        order stuck ACCEPTED on a closed weekend market): every standalone
+        pending order on the connection's account is cancelled, and any open
+        position matching one of the user's live trades is closed. All matching
+        trade rows are marked CLOSED.
+        """
+        from app.services.trading.ctid_oauth import ensure_valid_token
+
+        trade = (
+            await session.execute(
+                select(LiveTrade)
+                .where(LiveTrade.user_id == user.id, LiveTrade.dry_run.is_(False))
+                .order_by(LiveTrade.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if trade is None or not trade.connection_id:
+            return LiveExecutionResult(
+                allowed=False,
+                reason="No live trade to cancel — nothing was sent to the broker.",
+            )
+        connection = (
+            await session.execute(
+                select(BrokerConnection).where(BrokerConnection.id == trade.connection_id)
+            )
+        ).scalar_one_or_none()
+        if connection is None:
+            return LiveExecutionResult(allowed=False, reason="Broker connection no longer exists.")
+        if not await ensure_valid_token(session, connection):
+            return LiveExecutionResult(
+                allowed=False,
+                reason="Your cTrader access token expired — reconnect (Trading tab) "
+                       "and try /cancel_live again.",
+            )
+        access_token = decrypt_secret(connection.access_token_enc)
+        creds = _connection_creds(connection)
+        account_id = int(connection.account_id or 0) if connection.account_id \
+            and str(connection.account_id).isdigit() else 0
+        if not account_id:
+            return LiveExecutionResult(
+                allowed=False,
+                reason="cTrader account id is missing on this connection — reconnect from the Trading tab.",
+            )
+
+        cancelled: list[int] = []
+        failed: list[str] = []
+        try:
+            pending = await self.client.get_pending_orders(access_token, creds=creds, account_id=account_id)
+        except CTraderError as exc:
+            raise CTraderError(f"broker step 'orders': {exc}") from exc
+        for order in pending:
+            if order["position_id"]:
+                continue  # protective order attached to an open position — leave it
+            try:
+                await self.client.cancel_order(
+                    access_token, creds=creds, account_id=account_id,
+                    order_id=order["order_id"],
+                )
+                cancelled.append(order["order_id"])
+            except CTraderError as exc:
+                failed.append(f"order {order['order_id']}: {exc}")
+
+        closed = 0
+        trade_rows = (
+            await session.execute(
+                select(LiveTrade).where(
+                    LiveTrade.connection_id == connection.id,
+                    LiveTrade.dry_run.is_(False),
+                )
+            )
+        ).scalars().all()
+        trade_symbols = {t.symbol.upper().replace("/", "").replace("-", "") for t in trade_rows}
+        try:
+            positions = await self.client.get_positions(access_token, creds=creds, account_id=account_id)
+        except CTraderError as exc:
+            positions = []
+            failed.append(f"positions: {exc}")
+        for pos in positions:
+            if pos.symbol.upper().replace("/", "").replace("-", "") not in trade_symbols:
+                continue
+            try:
+                await self.client.close_position(
+                    access_token, creds=creds, account_id=account_id, position_id=pos.position_id
+                )
+                closed += 1
+            except CTraderError as exc:
+                failed.append(f"position {pos.position_id}: {exc}")
+
+        for row in trade_rows:
+            if row.status not in ("PENDING_CONFIRM", "PLACED"):
+                continue
+            row.status = "CLOSED"
+            row.reason = "Cancelled via /cancel_live."
+        await session.flush()
+        await session.commit()
+
+        parts = []
+        if cancelled:
+            parts.append(f"Cancelled {len(cancelled)} pending order(s): "
+                         f"{', '.join(str(o) for o in cancelled)}")
+        if closed:
+            parts.append(f"Closed {closed} matching open position(s).")
+        if failed:
+            parts.append(f"⚠️ Not cancelled: {'; '.join(failed)}")
+        if not parts:
+            parts.append("No pending orders or matching positions were found on the broker — "
+                         "nothing to cancel.")
+        reason = "\n".join(parts)
+        logger.warning(f"cancel_live (user {user.id}, account {account_id}): {reason}")
+        return LiveExecutionResult(allowed=True, reason=reason)
+
     async def sync_closed(self, session, connection) -> int:
         """Mark PLACED trades CLOSED once the broker shows no open positions.
 
