@@ -179,8 +179,12 @@ def _format_error(frame: dict) -> str:
 
 
 class CTraderClient:
-    def __init__(self, *, timeout: float | None = None, **_: object):
+    def __init__(self, *, timeout: float | None = None,
+                 min_volume_units: float | None = None, **_: object):
         self._timeout = timeout if timeout is not None else settings.CTRADER_WS_TIMEOUT_SECONDS
+        self.min_volume_units = (
+            min_volume_units if min_volume_units is not None else settings.CTRADER_MIN_VOLUME_UNITS
+        )
         # symbolId -> symbolName per account, kept across connections (products
         # rarely change, and resolve_symbol_id/get_positions both need it).
         self._symbol_cache: dict[int, dict[int, str]] = {}
@@ -501,6 +505,11 @@ class CTraderClient:
         """Place a market order, then attach SL/TP after the fill (2110)."""
         account_id = int(account_id)
         client_order_id = client_order_id or f"cw-{uuid4().hex[:12]}"
+        if float(volume) < self.min_volume_units:
+            raise CTraderError(
+                f"volume {float(volume):.4g} units is below the cTrader minimum of "
+                f"{self.min_volume_units:g} units (0.01 lots)"
+            )
         async with self._session(creds, access_token=access_token, account_id=account_id) as ws:
             filled = await self._request_execution(
                 ws,

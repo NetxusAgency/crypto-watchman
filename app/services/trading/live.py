@@ -356,6 +356,27 @@ class LiveExecutionService:
                 risk_dict=risk_dict,
             ), None
 
+        # Broker minimum lot size: cTrader forex = 0.01 lots = 1000 base units.
+        min_units = float(settings.CTRADER_MIN_VOLUME_UNITS)
+        if quantity < min_units:
+            if price and min_units * price <= notional_cap:
+                quantity = min_units
+            else:
+                return LiveExecutionResult(
+                    allowed=False,
+                    reason=(
+                        f"Computed size {quantity:.2f} units (~{quantity / 100:.4f} lots) is below "
+                        f"cTrader's minimum of {min_units:g} units (0.01 lots), and a minimum-size "
+                        f"position (~€{min_units * (price or 0):,.0f} notional at {price or 0:g}) "
+                        f"would exceed your {settings.LIVE_MAX_POSITION_PCT:g}% max-position cap "
+                        f"(€{notional_cap:,.0f}). Raise the LIVE_MAX_POSITION_PCT env setting (Render "
+                        f"→ Environment) to let the minimum lot through, or reduce the stop distance "
+                        f"so the sized volume reaches the minimum."
+                    ),
+                    plan_dict=plan_dict,
+                    risk_dict=risk_dict,
+                ), None
+
         try:
             symbol_id = await self.client.resolve_symbol_id(
                 access_token, symbol.upper(), creds=creds, account_id=account_id

@@ -61,11 +61,11 @@ def _install_fake_ws(monkeypatch):
     monkeypatch.setattr(ctrader, "websockets", fake_mod)
 
 
-def _client(monkeypatch, script, timeout=5.0):
+def _client(monkeypatch, script, timeout=5.0, min_volume_units=0.0):
     _CANNED[:] = script
     _SENT[:] = []
     _install_fake_ws(monkeypatch)
-    return CTraderClient(timeout=timeout)
+    return CTraderClient(timeout=timeout, min_volume_units=min_volume_units)
 
 
 def _sent_frame(payload_type):
@@ -193,6 +193,20 @@ class TestResolveSymbolId:
 
 
 class TestPlaceMarketOrder:
+    async def test_rejects_below_minimum_volume(self, monkeypatch):
+        client = _client(monkeypatch, [], min_volume_units=1000.0)
+        with pytest.raises(CTraderError, match="minimum"):
+            await client.place_market_order(
+                access_token="TOK",
+                creds=CREDS,
+                account_id=123,
+                symbol_id=111,
+                side="Buy",
+                volume=438.63,
+                stop_loss=1.09,
+            )
+        assert not any(f.get("payloadType") == 2106 for f in _SENT)
+
     async def test_market_then_sltp_amend(self, monkeypatch):
         script = [
             _version(),

@@ -492,6 +492,21 @@ matching, not just the app's own rows:
   outcome. Handler `/cancel_live` added to `base.py`.
 - Tests: +3 (pending-orders list, cancel ok via orderId correlation, cancel-
   rejected raises). Total **238 passed**.
+
+## 2H.9 — TRADING_BAD_VOLUME (size below 0.01 lots)
+
+A real broker rejection: `Order volume = 438.63 is smaller than minimum 1000.00`.
+The 10% notional cap (10% × 5,000 / 1.14) sized the position to 438.63 units —
+below cTrader's floor of 1000 units (0.01 lots).
+
+- New `CTRADER_MIN_VOLUME_UNITS` setting (default 1000). `place_market_order`
+  raises a clear local `CTraderError` before any order reaches the broker when
+  volume is below the minimum (no more raw BAD_VOLUME from the exchange).
+- Sizing in `_build_proposal`: if the computed size is below the minimum, it is
+  bumped up to the minimum when that still fits inside
+  `LIVE_MAX_POSITION_PCT`; otherwise the proposal is declined with the exact
+  numbers and the fix (raise `LIVE_MAX_POSITION_PCT` on Render, or reduce stop
+  distance). Tests: 239 passed.
 - Expected user fix (older behavior): reconnect the account from the Trading tab with the mode matching where
   account 12339252 actually lives, or delete the stale connection.
 
