@@ -27,6 +27,7 @@ so the audit log is real).
 from __future__ import annotations
 
 import logging
+import math
 
 from sqlalchemy import select
 
@@ -383,9 +384,15 @@ class LiveExecutionService:
                 risk_dict=risk_dict,
             ), None
 
-        # Broker minimum lot size: cTrader forex = 0.01 lots = 1000 base units.
+        # Broker lot rules: cTrader forex = 0.01 lots = 1000 base units, and
+        # orders must be a WHOLE multiple of the volume step (1000 units). The
+        # notional cap shrinks the sized volume down to e.g. 1099.05 units,
+        # which cTrader rejects — snap down to the nearest whole step first.
         min_units = float(settings.CTRADER_MIN_VOLUME_UNITS)
-        if quantity < min_units:
+        step_units = float(settings.CTRADER_VOLUME_STEP_UNITS)
+        if quantity and quantity >= step_units:
+            quantity = math.floor(quantity / step_units) * step_units
+        if not quantity or quantity < min_units:
             if price and min_units * price <= notional_cap:
                 quantity = min_units
             else:

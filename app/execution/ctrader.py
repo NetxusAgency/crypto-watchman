@@ -180,11 +180,19 @@ def _format_error(frame: dict) -> str:
 
 class CTraderClient:
     def __init__(self, *, timeout: float | None = None,
-                 min_volume_units: float | None = None, **_: object):
+                 min_volume_units: float | None = None,
+                 volume_step_units: float | None = None, **_: object):
         self._timeout = timeout if timeout is not None else settings.CTRADER_WS_TIMEOUT_SECONDS
         self.min_volume_units = (
             min_volume_units if min_volume_units is not None else settings.CTRADER_MIN_VOLUME_UNITS
         )
+        self.volume_step_units = min_volume_units
+        if self.volume_step_units is not None and self.volume_step_units <= 0:
+            self.volume_step_units = None
+        if self.volume_step_units is None:
+            self.volume_step_units = settings.CTRADER_VOLUME_STEP_UNITS
+        # A step should never be finer than the minimum tradable size.
+        self.volume_step_units = min(self.volume_step_units, self.min_volume_units)
         # symbolId -> symbolName per account, kept across connections (products
         # rarely change, and resolve_symbol_id/get_positions both need it).
         self._symbol_cache: dict[int, dict[int, str]] = {}
@@ -509,6 +517,13 @@ class CTraderClient:
             raise CTraderError(
                 f"volume {float(volume):.4g} units is below the cTrader minimum of "
                 f"{self.min_volume_units:g} units (0.01 lots)"
+            )
+        if self.volume_step_units and (
+            float(volume) % self.volume_step_units > 1e-6
+        ):
+            raise CTraderError(
+                f"volume {float(volume):.4g} units must be a multiple of the cTrader "
+                f"volume step of {self.volume_step_units:g} units"
             )
         async with self._session(creds, access_token=access_token, account_id=account_id) as ws:
             filled = await self._request_execution(

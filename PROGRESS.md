@@ -521,6 +521,22 @@ pending trade in the UI.
   (status -> CLOSED, reason "Simulated — dry run (archived)."). Called at
   startup (main.py lifespan) and before the propose guard, so existing rows
   stop showing as pending after the next deploy.
-- Expected user fix (older behavior): reconnect the account from the Trading tab with the mode matching where
+
+## 2H.11 — Off-step volumes rejected by the broker (TRADING_BAD_VOLUME)
+
+After raising `LIVE_MAX_POSITION_PCT`, a real order got
+`TRADING_BAD_VOLUME: volume = 1099.05 must be multiple of volume step = 1000.00`.
+cTrader only accepts whole 0.01-lot steps, and the notional cap divided by price
+can land on an off-step value like 1099.05.
+
+- New `CTRADER_VOLUME_STEP_UNITS` setting (default 1000). The sized quantity is
+  snapped DOWN to a whole step (`floor(qty / step) * step`) before the min-size
+  bump, so a cap can never produce 1099.05 again; sub-min results are bumped to
+  `CTRADER_MIN_VOLUME_UNITS` when the cap allows, else declined with the
+  "raise LIVE_MAX_POSITION_PCT" message.
+- `CTraderClient` gained a `volume_step_units` guard in `place_market_order`
+  (step defaults to min size; any volume not a multiple raises
+  "must be a multiple of the cTrader volume step"). Test helper accepts
+  `volume_step_units`; new test covers the 1099.05/1000 rejection. Tests: 240.
   account 12339252 actually lives, or delete the stale connection.
 

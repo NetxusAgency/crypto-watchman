@@ -84,6 +84,7 @@ class Settings(BaseSettings):
     # Per-call/request/execution wait before surfacing a timeout.
     CTRADER_WS_TIMEOUT_SECONDS: float = Field(default=25.0, ge=5.0)
     CTRADER_MIN_VOLUME_UNITS: float = Field(default=1000.0, ge=1.0)
+    CTRADER_VOLUME_STEP_UNITS: float = Field(default=1000.0, ge=1.0)
 
     # cTrader Open API OAuth (cTID). Client ID/Secret come from an Open API
     # application created at id.ctrader.com -> Open API -> Your applications.
