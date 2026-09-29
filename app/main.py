@@ -80,6 +80,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Trading strategy seeding skipped: {e}")
 
+    # 1d. Archive simulated dry-run rows left stuck at PLACED so they never look
+    # like open live trades or block the one-position-per-connection guard.
+    try:
+        from app.services.trading.live import close_stale_dry_runs
+
+        async with async_session_maker() as session:
+            archived = await close_stale_dry_runs(session)
+            await session.commit()
+            if archived:
+                logger.info(f"Archived {archived} stale dry-run trade(s).")
+    except Exception as e:
+        logger.warning(f"Dry-run sweep skipped at startup: {e}")
+
     # 2. Local scheduler for checking alerts (runs when Celery isn't running)
     scheduler = AsyncIOScheduler()
     async def run_alert_check():

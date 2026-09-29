@@ -142,17 +142,44 @@ def format_live_proposal(trade: LiveTrade, connection: BrokerConnection | None) 
 
 
 async def has_open_live_trade(session, connection_id: int | None, except_id: int | None = None) -> bool:
-    """True when the connection has a PLACED or PENDING_CONFIRM trade on file."""
+    """True when the connection has a PLACED or PENDING_CONFIRM trade on file.
+
+    Dry-run rows are excluded — they never touch the broker and must never hold
+    a real position slot open.
+    """
     if connection_id is None:
         return False
     stmt = select(LiveTrade.id).where(
         LiveTrade.connection_id == connection_id,
         LiveTrade.status.in_(["PLACED", "PENDING_CONFIRM"]),
+        LiveTrade.dry_run.is_(False),
     )
     if except_id is not None:
         stmt = stmt.where(LiveTrade.id != except_id)
     result = await session.execute(stmt)
     return result.first() is not None
+
+
+async def close_stale_dry_runs(session, *, connection_id: int | None = None) -> int:
+    """Archive simulated (dry-run) rows that are stuck at PLACED.
+
+    Dry runs never place anything on the broker; leaving them PLACED made them
+    look like live pending trades in the UI and could trip the no-duplicate
+    guard. Returns the number of rows archived.
+    """
+    stmt = select(LiveTrade).where(
+        LiveTrade.dry_run.is_(True),
+        LiveTrade.status == "PLACED",
+    )
+    if connection_id is not None:
+        stmt = stmt.where(LiveTrade.connection_id == connection_id)
+    rows = (await session.execute(stmt)).scalars().all()
+    for row in rows:
+        row.status = "CLOSED"
+        row.reason = "Simulated — dry run (archived)."
+    if rows:
+        await session.flush()
+    return len(rows)
 
 
 def _connection_creds(connection: BrokerConnection | None) -> CTraderCredentials:
@@ -447,6 +474,7 @@ class LiveExecutionService:
 
         if not dry_run:
             # 5. No-duplicate guard: one open trade at a time per connection.
+            await close_stale_dry_runs(session, connection_id=connection.id)
             if await has_open_live_trade(session, connection.id):
                 return LiveExecutionResult(
                     allowed=False,

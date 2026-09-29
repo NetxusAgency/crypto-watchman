@@ -507,6 +507,20 @@ below cTrader's floor of 1000 units (0.01 lots).
   `LIVE_MAX_POSITION_PCT`; otherwise the proposal is declined with the exact
   numbers and the fix (raise `LIVE_MAX_POSITION_PCT` on Render, or reduce stop
   distance). Tests: 239 passed.
+
+## 2H.10 — Dry-run rows must not block live trading
+
+Dry-run (Simulate) rows are written with status "PLACED" (broker never touched)
+and the no-duplicate guard counted every PLACED/PENDING_CONFIRM row — so one
+dry-run blocked real proposes ("another trade already open") and showed as a
+pending trade in the UI.
+
+- `has_open_live_trade` now filters `dry_run.is_(False)`. Dry runs never hold a
+  real position slot again.
+- New `close_stale_dry_runs(...)`: archives dry-run rows stuck at PLACED
+  (status -> CLOSED, reason "Simulated — dry run (archived)."). Called at
+  startup (main.py lifespan) and before the propose guard, so existing rows
+  stop showing as pending after the next deploy.
 - Expected user fix (older behavior): reconnect the account from the Trading tab with the mode matching where
   account 12339252 actually lives, or delete the stale connection.
 
