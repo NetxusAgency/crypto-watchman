@@ -540,3 +540,25 @@ can land on an off-step value like 1099.05.
   `volume_step_units`; new test covers the 1099.05/1000 rejection. Tests: 240.
   account 12339252 actually lives, or delete the stale connection.
 
+## 2H.12 — Per-symbol volume rules (index/stock CFDs vs forex min)
+
+A non-forex symbol priced ~157 sized at 7.95 units got rejected as "below the
+1000-unit minimum" — but 1000 units is the FOREX minimum (0.01 lot of a 100k
+lot). cTrader publishes per-symbol `minVolume`/`stepVolume` in the symbols
+feed, so the 1000-unit assumption must not apply to indices/shares.
+
+- `_symbol_map` now parses `spec.tradeData.{minVolume, stepVolume, lotSize}`
+  from every symbol into `_symbol_specs[account]`.
+- `_calibrate_scale`: derives the feed's fixed-point scale from an anchor forex
+  pair (true 0.01-lot step = lotSize/100 units; EURUSD = 1000), so raw proto
+  specs (e.g. 100000) and unit specs (1000) both convert correctly.
+- `_volume_rules(account, symbol)`: per-symbol (min_units, step_units);
+  falls back to the client's configured values, and to settings when disabled.
+- New `CTraderClient.symbol_volume_rules(token, symbol, ...)` returns
+  (symbol_id, min, step); `place_market_order` enforces the per-symbol rules;
+  the snapping in `live.py` uses the real min/step (step comparison made
+  float-tolerant via `min(rem, step - rem) > tol`).
+- Tests: `test_uses_broker_symbol_specs` (EURUSD anchor scale=100, index CFD
+  step 0.05/min 0.01 passes a 7.95-unit order that the old forex default would
+  reject). Place tests now script a 2115 symbols frame. Tests: 241.
+

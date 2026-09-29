@@ -198,7 +198,17 @@ class TestResolveSymbolId:
 
 class TestPlaceMarketOrder:
     async def test_rejects_below_minimum_volume(self, monkeypatch):
-        client = _client(monkeypatch, [], min_volume_units=1000.0)
+        client = _client(
+            monkeypatch,
+            [
+                _version(),
+                _frame(2101, {}),
+                _frame(2103, {"ctidTraderAccountId": 123}),
+                _frame(2115, {"ctidTraderAccountId": 123,
+                              "symbol": [{"symbolId": 111, "symbolName": "EURUSD"}]}),
+            ],
+            min_volume_units=1000.0,
+        )
         with pytest.raises(CTraderError, match="minimum"):
             await client.place_market_order(
                 access_token="TOK",
@@ -212,7 +222,18 @@ class TestPlaceMarketOrder:
         assert not any(f.get("payloadType") == 2106 for f in _SENT)
 
     async def test_rejects_off_step_volume(self, monkeypatch):
-        client = _client(monkeypatch, [], min_volume_units=1000.0, volume_step_units=1000.0)
+        client = _client(
+            monkeypatch,
+            [
+                _version(),
+                _frame(2101, {}),
+                _frame(2103, {"ctidTraderAccountId": 123}),
+                _frame(2115, {"ctidTraderAccountId": 123,
+                              "symbol": [{"symbolId": 111, "symbolName": "EURUSD"}]}),
+            ],
+            min_volume_units=1000.0,
+            volume_step_units=1000.0,
+        )
         with pytest.raises(CTraderError, match="multiple"):
             await client.place_market_order(
                 access_token="TOK",
@@ -225,11 +246,51 @@ class TestPlaceMarketOrder:
             )
         assert not any(f.get("payloadType") == 2106 for f in _SENT)
 
+    async def test_uses_broker_symbol_specs(self, monkeypatch):
+        # Index CFD priced at ~157: broker reports a 0.05-contract step, so 7.95
+        # units is a legal order (unlike the 1000-unit forex default). Specs are
+        # in proto scale here: EURUSD step 100000 with lotSize 100000 anchor the
+        # scale at 100, so the index step 5 -> 0.05 units, min 1 -> 0.01 unit.
+        script = [
+            _version(),
+            _frame(2101, {}),
+            _frame(2103, {"ctidTraderAccountId": 123}),
+            _frame(2115, {
+                "ctidTraderAccountId": 123,
+                "symbol": [
+                    {"symbolId": 111, "symbolName": "EURUSD",
+                     "spec": {"tradeData": {"minVolume": 100000, "stepVolume": 100000,
+                                            "lotSize": 100000}}},
+                    {"symbolId": 222, "symbolName": "US100",
+                     "spec": {"tradeData": {"minVolume": 1, "stepVolume": 5,
+                                            "lotSize": 100}}},
+                ],
+            }),
+            _frame(2126, {"ctidTraderAccountId": 123, "executionType": 3,
+                          "order": {"orderId": 902, "clientOrderId": "x"},
+                          "position": {"positionId": 556}}),
+            _frame(2126, {"ctidTraderAccountId": 123, "executionType": 4, "order": {"orderId": 902}}),
+        ]
+        client = _client(monkeypatch, script, min_volume_units=1000.0, volume_step_units=1000.0)
+        reply = await client.place_market_order(
+            access_token="TOK",
+            creds=CREDS,
+            account_id=123,
+            symbol_id=222,
+            side="Buy",
+            volume=7.95,
+            stop_loss=155.0,
+        )
+        assert reply.order_id == "902"
+        assert _sent_frame(2106)["payload"]["volume"] == 795  # 7.95 units -> proto
+
     async def test_market_then_sltp_amend(self, monkeypatch):
         script = [
             _version(),
             _frame(2101, {}),
             _frame(2103, {"ctidTraderAccountId": 123}),
+            _frame(2115, {"ctidTraderAccountId": 123,
+                          "symbol": [{"symbolId": 111, "symbolName": "EURUSD"}]}),
             _frame(
                 2126,
                 {
@@ -267,6 +328,8 @@ class TestPlaceMarketOrder:
             _version(),
             _frame(2101, {}),
             _frame(2103, {"ctidTraderAccountId": 123}),
+            _frame(2115, {"ctidTraderAccountId": 123,
+                          "symbol": [{"symbolId": 111, "symbolName": "EURUSD"}]}),
             _frame(2126, {"ctidTraderAccountId": 123, "executionType": 7, "description": "no liquidity"}),
         ]
         client = _client(monkeypatch, script)

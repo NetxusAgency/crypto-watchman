@@ -384,35 +384,13 @@ class LiveExecutionService:
                 risk_dict=risk_dict,
             ), None
 
-        # Broker lot rules: cTrader forex = 0.01 lots = 1000 base units, and
-        # orders must be a WHOLE multiple of the volume step (1000 units). The
-        # notional cap shrinks the sized volume down to e.g. 1099.05 units,
-        # which cTrader rejects — snap down to the nearest whole step first.
-        min_units = float(settings.CTRADER_MIN_VOLUME_UNITS)
-        step_units = float(settings.CTRADER_VOLUME_STEP_UNITS)
-        if quantity and quantity >= step_units:
-            quantity = math.floor(quantity / step_units) * step_units
-        if not quantity or quantity < min_units:
-            if price and min_units * price <= notional_cap:
-                quantity = min_units
-            else:
-                return LiveExecutionResult(
-                    allowed=False,
-                    reason=(
-                        f"Computed size {quantity:.2f} units (~{quantity / 100:.4f} lots) is below "
-                        f"cTrader's minimum of {min_units:g} units (0.01 lots), and a minimum-size "
-                        f"position (~€{min_units * (price or 0):,.0f} notional at {price or 0:g}) "
-                        f"would exceed your {settings.LIVE_MAX_POSITION_PCT:g}% max-position cap "
-                        f"(€{notional_cap:,.0f}). Raise the LIVE_MAX_POSITION_PCT env setting (Render "
-                        f"→ Environment) to let the minimum lot through, or reduce the stop distance "
-                        f"so the sized volume reaches the minimum."
-                    ),
-                    plan_dict=plan_dict,
-                    risk_dict=risk_dict,
-                ), None
-
+        # Broker lot rules are SYMBOL-SPECIFIC. Forex pairs trade in 0.01-lot
+        # steps (1000 base units), but an index/stock CFD at ~157 has its own
+        # minVolume/stepVolume in the symbols feed. Read the real ones and snap
+        # the sized volume down to a whole step so the notional cap can never
+        # produce an off-step size like 1099.05 units again.
         try:
-            symbol_id = await self.client.resolve_symbol_id(
+            symbol_id, min_units, step_units = await self.client.symbol_volume_rules(
                 access_token, symbol.upper(), creds=creds, account_id=account_id
             )
         except CTraderError as exc:
@@ -424,6 +402,27 @@ class LiveExecutionService:
                 plan_dict=plan_dict,
                 risk_dict=risk_dict,
             ), None
+
+        if quantity and quantity >= step_units:
+            quantity = math.floor(quantity / step_units) * step_units
+        if not quantity or quantity < min_units:
+            if price and min_units * price <= notional_cap:
+                quantity = min_units
+            else:
+                return LiveExecutionResult(
+                    allowed=False,
+                    reason=(
+                        f"Computed size {quantity:.4g} units is below the broker minimum of "
+                        f"{min_units:g} units for {symbol} on cTrader, and a minimum-size position "
+                        f"(~€{min_units * (price or 0):,.0f} notional at {price or 0:g}) would exceed "
+                        f"your {settings.LIVE_MAX_POSITION_PCT:g}% max-position cap "
+                        f"(€{notional_cap:,.0f}). Reduce the stop distance so the sized volume "
+                        f"reaches the minimum, or raise the LIVE_MAX_POSITION_PCT env setting "
+                        f"(Render → Environment)."
+                    ),
+                    plan_dict=plan_dict,
+                    risk_dict=risk_dict,
+                ), None
 
         data = (
             access_token,

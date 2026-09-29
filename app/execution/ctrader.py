@@ -196,6 +196,11 @@ class CTraderClient:
         # symbolId -> symbolName per account, kept across connections (products
         # rarely change, and resolve_symbol_id/get_positions both need it).
         self._symbol_cache: dict[int, dict[int, str]] = {}
+        # Per-symbol raw volume specs (minVolume/stepVolume/lotSize) from the
+        # symbols feed, plus a per-account fixed-point scale so they can be
+        # converted to human base units (see _calibrate_scale / _volume_rules).
+        self._symbol_specs: dict[int, dict[int, dict[str, float]]] = {}
+        self._symbol_scales: dict[int, float] = {}
         # Last payload sent; tests inspect this for dry-run assertions.
         self.last_payload: CTraderPayload | None = None
 
@@ -425,6 +430,73 @@ class CTraderClient:
                 )
         return accounts
 
+    @staticmethod
+    def _calibrate_scale(specs: dict[int, dict[str, float]]) -> float:
+        """Derive the global fixed-point scale from an anchor forex pair.
+
+        For a forex pair, the true minimum step is 0.01 standard lots =
+        lotSize / 100 base units (EURUSD: 100000 / 100 = 1000). Comparing the
+        broker's RAW stepVolume for that pair against its lotSize tells us how
+        the symbols feed scales volume, which is uniform across an account.
+        """
+        for raw in specs.values():
+            lot_size = raw.get("lotSize") or 0
+            raw_step = raw.get("stepVolume") or 0
+            if lot_size > 0 and raw_step > 0:
+                scale = raw_step / (lot_size / 100.0)
+                if 0 < scale < 1e6:
+                    return scale
+        return 1.0
+
+    def _volume_rules(self, account_id: int, symbol_id: int) -> tuple[float, float]:
+        """Per-symbol (min_units, step_units) in human base units.
+
+        Falls back to the configured forex defaults when the broker did not
+        publish specs for the symbol (e.g. trading disabled for it).
+        """
+        specs = (self._symbol_specs.get(int(account_id)) or {}).get(int(symbol_id)) or {}
+        scale = self._symbol_scales.get(int(account_id), 1.0)
+        if specs:
+            min_units = max(0.0, (specs.get("minVolume") or 0.0) / scale)
+            step_units = max(0.0, (specs.get("stepVolume") or 0.0) / scale)
+        else:
+            min_units = self.min_volume_units
+            step_units = self.volume_step_units
+        if min_units <= 0 and step_units <= 0:
+            return 0.0, 0.0  # rules disabled for this client
+        if step_units <= 0:
+            step_units = min_units if min_units > 0 else float(settings.CTRADER_VOLUME_STEP_UNITS)
+        if min_units <= 0:
+            min_units = step_units
+        return min_units, step_units
+
+    def _lookup_symbol(self, account_id: int, symbol: str) -> int | None:
+        wanted = _normalize_symbol(symbol)
+        for symbol_id, name in (self._symbol_cache.get(int(account_id)) or {}).items():
+            if _normalize_symbol(name) == wanted:
+                return symbol_id
+        return None
+
+    async def symbol_volume_rules(
+        self, access_token: str, symbol: str, *, creds: CTraderCredentials, account_id: int
+    ) -> tuple[int | None, float, float]:
+        """Resolve a human symbol to (symbol_id, min_units, step_units).
+
+        min/step come from the broker's per-symbol trade data, so an
+        index/stock CFD (~157 priced) is sized against its own lot rules rather
+        than the 1000-unit forex minimum.
+        """
+        account_id = int(account_id)
+        symbol_id = self._lookup_symbol(account_id, symbol)
+        if symbol_id is None:
+            async with self._session(creds, access_token=access_token, account_id=account_id) as ws:
+                await self._symbol_map(ws, account_id)
+                symbol_id = self._lookup_symbol(account_id, symbol)
+        if symbol_id is None:
+            return None, self.min_volume_units, self.volume_step_units
+        min_units, step_units = self._volume_rules(account_id, symbol_id)
+        return symbol_id, min_units, step_units
+
     async def _symbol_map(self, ws, account_id: int) -> dict[int, str]:
         cached = self._symbol_cache.get(account_id)
         if cached:
@@ -437,15 +509,24 @@ class CTraderClient:
             timeout=self._timeout,
         )
         mapping: dict[int, str] = {}
+        specs: dict[int, dict[str, float]] = {}
         for symbol in (resp.get("payload") or {}).get("symbol", []) or []:
             try:
                 sid = int(symbol.get("symbolId") or 0)
                 name = str(symbol.get("symbolName") or sid or "")
                 if sid:
                     mapping[sid] = name
+                trade_data = ((symbol.get("spec") or {}).get("tradeData") or {})
+                raw_min = float(trade_data.get("minVolume") or 0)
+                raw_step = float(trade_data.get("stepVolume") or 0)
+                lot_size = float(trade_data.get("lotSize") or 0)
+                if sid and (raw_min or raw_step):
+                    specs[sid] = {"minVolume": raw_min, "stepVolume": raw_step, "lotSize": lot_size}
             except (TypeError, ValueError):
                 continue
         self._symbol_cache[int(account_id)] = mapping
+        self._symbol_specs[int(account_id)] = specs
+        self._symbol_scales[int(account_id)] = self._calibrate_scale(specs)
         return mapping
 
     async def resolve_symbol_id(
@@ -513,19 +594,22 @@ class CTraderClient:
         """Place a market order, then attach SL/TP after the fill (2110)."""
         account_id = int(account_id)
         client_order_id = client_order_id or f"cw-{uuid4().hex[:12]}"
-        if float(volume) < self.min_volume_units:
-            raise CTraderError(
-                f"volume {float(volume):.4g} units is below the cTrader minimum of "
-                f"{self.min_volume_units:g} units (0.01 lots)"
-            )
-        if self.volume_step_units and (
-            float(volume) % self.volume_step_units > 1e-6
-        ):
-            raise CTraderError(
-                f"volume {float(volume):.4g} units must be a multiple of the cTrader "
-                f"volume step of {self.volume_step_units:g} units"
-            )
         async with self._session(creds, access_token=access_token, account_id=account_id) as ws:
+            await self._symbol_map(ws, account_id)
+            min_units, step_units = self._volume_rules(account_id, symbol_id)
+            if float(volume) < min_units:
+                raise CTraderError(
+                    f"volume {float(volume):.4g} units is below the cTrader minimum of "
+                    f"{min_units:g} units for symbol {symbol_id}"
+                )
+            if step_units:
+                rem = float(volume) % step_units
+                tol = max(step_units * 1e-6, 1e-6)
+                if min(rem, step_units - rem) > tol:
+                    raise CTraderError(
+                        f"volume {float(volume):.4g} units must be a multiple of the cTrader "
+                        f"volume step of {step_units:g} units for symbol {symbol_id}"
+                    )
             filled = await self._request_execution(
                 ws,
                 PT_NEW_ORDER_REQ,
