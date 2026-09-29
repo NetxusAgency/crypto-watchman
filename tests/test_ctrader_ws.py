@@ -321,7 +321,8 @@ class TestPlaceMarketOrder:
         assert order_req["payload"]["clientOrderId"]
         assert "stopLoss" not in order_req["payload"]
         assert "takeProfit" not in order_req["payload"]
-        assert _sent_frame(2110)["payload"] == {"positionId": 555, "stopLoss": 58000.0, "takeProfit": 62000.0}
+        assert _sent_frame(2110)["payload"] == {"ctidTraderAccountId": 123, "positionId": 555,
+                                            "stopLoss": 58000.0, "takeProfit": 62000.0}
 
     async def test_rejected_order_raises(self, monkeypatch):
         script = [

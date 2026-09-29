@@ -631,7 +631,7 @@ class CTraderClient:
             position_id = int(position.get("positionId") or 0)
 
             if (stop_loss or take_profit) and position_id:
-                sltp = {"positionId": position_id}
+                sltp = {"ctidTraderAccountId": account_id, "positionId": position_id}
                 if stop_loss:
                     sltp["stopLoss"] = round(float(stop_loss), 6)
                 if take_profit:

@@ -562,3 +562,14 @@ feed, so the 1000-unit assumption must not apply to indices/shares.
   step 0.05/min 0.01 passes a 7.95-unit order that the old forex default would
   reject). Place tests now script a 2115 symbols frame. Tests: 241.
 
+## 2H.13 — SL/TP attach (2110) missing ctidTraderAccountId
+
+Order filled, then the 2110 amend was rejected `INVALID_REQUEST: Message
+missing required fields: ctidTraderAccountId`, so the position was auto-closed
+(a full notional haircut on a good entry).
+
+- `place_market_order` now includes `"ctidTraderAccountId": account_id` in the
+  ProtoOAAmendPositionSLTPReq payload (2110). Cancel/close already had it.
+- `test_market_then_sltp_amend` updated to assert the account id is present.
+  Tests: 241.
+
