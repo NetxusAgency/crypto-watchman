@@ -324,6 +324,37 @@ class TestPlaceMarketOrder:
         assert _sent_frame(2110)["payload"] == {"ctidTraderAccountId": 123, "positionId": 555,
                                             "stopLoss": 58000.0, "takeProfit": 62000.0}
 
+    async def test_amend_confirmed_by_accepted_event(self, monkeypatch):
+        # Live broker behavior: AmendPositionSLTP confirms with a single
+        # ORDER_ACCEPTED (executionType 2) event — no REPLACED follow-up.
+        # Waiting for a "terminal" fill was auto-closing good positions.
+        script = [
+            _version(),
+            _frame(2101, {}),
+            _frame(2103, {"ctidTraderAccountId": 123}),
+            _frame(2115, {"ctidTraderAccountId": 123,
+                          "symbol": [{"symbolId": 111, "symbolName": "EURUSD"}]}),
+            _frame(2126, {"ctidTraderAccountId": 123, "executionType": 3,
+                          "order": {"orderId": 903, "clientOrderId": "x"},
+                          "position": {"positionId": 557}}),
+            _frame(2126, {"ctidTraderAccountId": 123, "executionType": 2,
+                          "order": {"orderId": 903}}),
+        ]
+        client = _client(monkeypatch, script)
+        reply = await client.place_market_order(
+            access_token="TOK",
+            creds=CREDS,
+            account_id=123,
+            symbol_id=111,
+            side="Buy",
+            volume=2.5,
+            stop_loss=1.09,
+            take_profit=1.15,
+        )
+        assert reply.order_id == "903"
+        assert _sent_frame(2110)["payload"]["ctidTraderAccountId"] == 123
+        assert not any(f.get("payloadType") == 2111 for f in _SENT)
+
     async def test_rejected_order_raises(self, monkeypatch):
         script = [
             _version(),

@@ -573,3 +573,19 @@ missing required fields: ctidTraderAccountId`, so the position was auto-closed
 - `test_market_then_sltp_amend` updated to assert the account id is present.
   Tests: 241.
 
+## 2H.14 — AmendPositionSLTP confirms with ORDER_ACCEPTED, not a fill
+
+Next live run: order 320569742 FILLED, then the 2110 amend timed out after only
+"2126:2" (ORDER_ACCEPTED) arrived, so the code auto-closed the position. cTrader
+confirms a position-level SL/TP change with a single ORDER_ACCEPTED execution
+event — there is no separate REPLACED/FILLED follow-up, so treating ACCEPTED as
+"intermediate, keep waiting" made every attach look like a 25s timeout.
+
+- `_AMEND_OK` now includes `EXEC_ORDER_ACCEPTED`, so the attach returns as soon
+  as the broker accepts it and the position stays open with its stops.
+- `confirm_trade` now distinguishes "filled but SL/TP attach failed" (position
+  auto-closed) from the weekend no-fill timeout, so Telegram gives an accurate
+  message if an attach genuinely fails.
+- New `test_amend_confirmed_by_accepted_event`: amend answered only by
+  executionType 2 -> success, and no 2111 close is sent. Tests: 242.
+

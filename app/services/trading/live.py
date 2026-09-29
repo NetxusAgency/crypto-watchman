@@ -682,6 +682,16 @@ class LiveExecutionService:
                     ),
                     trade=trade,
                 )
+            if "filled but SL/TP attach failed" in str(e):
+                return LiveExecutionResult(
+                    allowed=False,
+                    reason=(
+                        "The order filled, but attaching the stop-loss/take-profit on the broker "
+                        "failed, so the position was auto-closed to avoid running unprotected. "
+                        f"Check the filled position's outcome in cTrader. (Broker said: {e})"
+                    ),
+                    trade=trade,
+                )
             return LiveExecutionResult(
                 allowed=False,
                 reason=f"Broker rejected the order: {e}",
