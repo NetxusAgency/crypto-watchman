@@ -396,9 +396,22 @@ class LiveExecutionService:
         except CTraderError as exc:
             raise CTraderError(f"broker step 'symbol': {exc}") from exc
         if symbol_id is None:
+            lookalikes: list[str] = []
+            try:
+                lookalikes = await self.client.search_symbols(
+                    access_token, creds=creds, account_id=account_id, query=symbol, limit=6
+                )
+            except CTraderError:
+                pass
+            hint = ""
+            if lookalikes:
+                hint = f" The broker offers similar symbols: {', '.join(lookalikes)}."
             return LiveExecutionResult(
                 allowed=False,
-                reason=f"cTrader has no symbol '{symbol}' on this account (check case, e.g. BTCUSD).",
+                reason=(
+                    f"cTrader has no symbol '{symbol}' on this account (check case, e.g. BTCUSD)."
+                    f"{hint} Use one of the exact names above or query the available symbols."
+                ),
                 plan_dict=plan_dict,
                 risk_dict=risk_dict,
             ), None

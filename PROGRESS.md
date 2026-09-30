@@ -589,3 +589,20 @@ event — there is no separate REPLACED/FILLED follow-up, so treating ACCEPTED a
 - New `test_amend_confirmed_by_accepted_event`: amend answered only by
   executionType 2 -> success, and no 2111 close is sent. Tests: 242.
 
+## 2H.15 — Crypto symbols: cTrader names ≠ app tickers
+
+User: forex works, BTCUSD says "unsupported pair". Root cause is brokerage, not
+the app: cTrader only serves instruments the account's broker lists, and crypto
+is often exposed under suffixed names (BTCUSD.d, BTCUSD.bit, …) so a plain
+"BTCUSD" exact lookup misses a real product.
+
+- `CTraderClient.search_symbols(...)`: lists the broker's actual symbol names,
+  substring-filtered by a query (normalized, "/" and "-" removed).
+- `_build_proposal`: when the symbol is not on the account, the decline message
+  now includes up to 6 broker lookalikes ("Broker offers similar: BTCUSD.d,
+  BTCUSD.bit") instead of a dead-end.
+- New `GET /trading/live/connections/{id}/symbols?query=BTC` endpoint: enumerates
+  what the connection can actually trade, resolving the stored account id
+  through the same self-healing pipeline.
+- Tests: 242 (full suite).
+

@@ -545,6 +545,54 @@ async def delete_trading_connection(
     return {"ok": True, "connection_id": connection_id}
 
 
+@router.get("/trading/live/connections/{connection_id}/symbols")
+async def trading_connection_symbols(
+    connection_id: int,
+    query: str = "",
+    limit: int = 200,
+    session: AsyncSession = Depends(get_session),
+    telegram_id: int = Depends(require_telegram_id),
+):
+    """List the symbols the broker actually offers for this connection.
+
+    cTrader brokers suffix crypto/indices (BTCUSD.d, US100.cash, …), so the
+    exact broker name may differ from the tickers used elsewhere in the app.
+    """
+    from app.services.broker import decrypt_secret
+    from app.services.trading.live import LiveExecutionService, _connection_creds
+
+    user = await db_service.get_or_create_user(session, telegram_id=telegram_id)
+    connection = next(
+        (
+            c
+            for c in await db_service.get_user_broker_connections(session, user.id)
+            if c.id == connection_id
+        ),
+        None,
+    )
+    if connection is None:
+        raise HTTPException(status_code=404, detail="Broker connection not found")
+
+    access_token = decrypt_secret(connection.access_token_enc or "")
+    creds = _connection_creds(connection)
+    service = LiveExecutionService()
+    try:
+        accounts = await service.client.get_accounts(access_token, creds=creds)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"cTrader accounts unavailable: {exc}") from exc
+    resolution = await service._resolve_account_id(connection, accounts, creds, access_token)
+    if not resolution["allowed"]:
+        raise HTTPException(status_code=400, detail=resolution["reason"])
+    try:
+        symbols = await service.client.search_symbols(
+            access_token, creds=creds, account_id=resolution["account_id"],
+            query=query, limit=limit,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"cTrader symbols unavailable: {exc}") from exc
+    return {"account_id": resolution["account_id"], "count": len(symbols), "symbols": symbols}
+
+
 @router.post("/trading/live/ctid/start")
 async def start_ctid_authorization(
     payload: OAuthStartPayload,

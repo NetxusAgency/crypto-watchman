@@ -501,6 +501,29 @@ class CTraderClient:
         min_units, step_units = self._volume_rules(account_id, symbol_id)
         return symbol_id, min_units, step_units
 
+    async def search_symbols(
+        self, access_token: str, *, creds: CTraderCredentials, account_id: int,
+        query: str = "", limit: int = 200,
+    ) -> list[str]:
+        """List symbol names the broker actually offers on this account.
+
+        cTrader brokers often suffix crypto/CFD instruments (BTCUSD.d, BTCUSD.bit,
+        US100.cash, …), so a plain "BTCUSD" lookup fails even though a crypto
+        product exists. Callers use this to show lookalikes.
+        """
+        account_id = int(account_id)
+        mapping = self._symbol_cache.get(account_id)
+        if mapping is None:
+            async with self._session(creds, access_token=access_token, account_id=account_id) as ws:
+                mapping = await self._symbol_map(ws, account_id)
+        q = _normalize_symbol(query)
+        names = list(mapping.values())
+        if q:
+            wanted = _normalize_symbol(q)
+            names = [n for n in names if wanted in _normalize_symbol(n)]
+        names = sorted(set(names), key=_normalize_symbol)
+        return names[: max(1, int(limit))]
+
     async def _symbol_map(self, ws, account_id: int) -> dict[int, str]:
         cached = self._symbol_cache.get(account_id)
         if cached:
