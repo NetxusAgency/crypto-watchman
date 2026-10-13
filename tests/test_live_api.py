@@ -309,3 +309,42 @@ class TestLiveEnabledGuard:
         result = live_enabled(conn, require_arm=True)
         assert result.allowed is False
         assert "No active broker connection" in result.reason
+
+
+class TestCandleAlias:
+    def test_plain_crypto_usd_maps_to_binance(self):
+        from app.services.trading.live import candle_alias
+
+        assert candle_alias("BTCUSD") == "BTCUSDT"
+        assert candle_alias("ETHUSD") == "ETHUSDT"
+        assert candle_alias("SOLUSD") == "SOLUSDT"
+
+    def test_broker_suffixes_are_stripped(self):
+        from app.services.trading.live import candle_alias
+
+        assert candle_alias("ETHUSD.d") == "ETHUSDT"
+        assert candle_alias("BTCUSD.bit") == "BTCUSDT"
+        assert candle_alias("SOLUSD_c") == "SOLUSDT"
+
+    def test_slash_and_case_normalized(self):
+        from app.services.trading.live import candle_alias
+
+        assert candle_alias("btc/usd") == "BTCUSDT"
+        assert candle_alias("ETH-USD") == "ETHUSDT"
+
+    def test_existing_binance_pairs_kept(self):
+        from app.services.trading.live import candle_alias
+
+        assert candle_alias("BTCUSDT") == "BTCUSDT"
+        assert candle_alias("ETHUSDC") == "ETHUSDC"
+
+    def test_forex_left_untouched(self):
+        from app.services.trading.live import candle_alias
+
+        assert candle_alias("EURUSD") == "EURUSD"
+        assert candle_alias("GBPJPY") == "GBPJPY"
+
+    def test_bare_crypto_ticker_maps_to_usdt(self):
+        from app.services.trading.live import candle_alias
+
+        assert candle_alias("BTC") == "BTCUSDT"

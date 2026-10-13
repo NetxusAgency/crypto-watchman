@@ -35,6 +35,7 @@ from app.core.config import settings
 from app.database.models import BrokerConnection, LiveTrade, User
 from app.execution.ctrader import CTraderClient, CTraderCredentials, CTraderError
 from app.services.broker import decrypt_secret
+from app.services.prices.price_fetcher import CRYPTO_MAPPING
 from app.services.trading.manager import PlanManager
 from app.services.trading.strategy_engine import spec_from_definition
 
@@ -45,11 +46,39 @@ __all__ = [
     "LiveExecutionResult",
     "live_enabled",
     "format_live_proposal",
+    "candle_alias",
 ]
 
 LIVE_TIMEFRAME = "4h"
 # Signals are computed on BTC spot candles (BTCUSDT) then executed on the CFD.
 CANDLE_PROXY = {"BTCUSD": "BTCUSDT", "BTCUT": "BTCUSDT", "BTCUSDT": "BTCUSDT"}
+
+_CRYPTO_TICKERS = set(CRYPTO_MAPPING)
+_BINANCE_QUOTES = ("USDT", "USDC", "BUSD", "FDUSD", "TUSD")
+_USD_QUOTES = ("USD", "EUR", "GBP", "JPY")
+
+
+def candle_alias(symbol: str) -> str:
+    """Map a broker symbol (BTCUSD, ETHUSD.d, BTC/USD) to a Binance spot pair.
+
+    Brokers suffix crypto/CFDs (BTCUSD.d, ETHUSD.bit, …) and the app's feeds
+    (Binance/CoinGecko) expect plain tickers, so strip the suffix and, when the
+    base asset is a known crypto, quote it against USDT. Forex pairs are left
+    untouched.
+    """
+    s = symbol.upper().strip().replace("/", "").replace("-", "").replace(" ", "")
+    s = s.split(".")[0].split("_")[0]  # drop broker suffixes like .d / .bit / _m
+    if s in CANDLE_PROXY:
+        return CANDLE_PROXY[s]
+    for q in _BINANCE_QUOTES:
+        if s.endswith(q) and s[: -len(q)] in _CRYPTO_TICKERS:
+            return s
+    for q in _USD_QUOTES:
+        if s.endswith(q) and s[: -len(q)] in _CRYPTO_TICKERS:
+            return f"{s[: -len(q)]}USDT"
+    if s in _CRYPTO_TICKERS:
+        return f"{s}USDT"
+    return s
 
 
 class LiveExecutionError(RuntimeError):
@@ -304,7 +333,7 @@ class LiveExecutionService:
                        "(Trading tab -> Connect with cTID) to obtain a fresh one.",
             ), None
 
-        symbol_alias = CANDLE_PROXY.get(symbol.upper(), symbol.upper())
+        symbol_alias = candle_alias(symbol)
         access_token = decrypt_secret(connection.access_token_enc)
         creds = _connection_creds(connection)
 

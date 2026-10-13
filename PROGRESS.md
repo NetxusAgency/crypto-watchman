@@ -653,3 +653,23 @@ BEARISH 1H is rejected (no force-fitting structure to a bias).
 - KlineFetcher INTERVAL_MAP + TwelveData mapping extended to 1m/5m.
 - New tests: 1H-bias gates LONG/SHORT/NEUTRAL setups, 1M CE refinement within
   the setup zone (CE pulled from 100.61 -> 100.5546). Tests: 251 (full suite).
+
+## 2H.18 - Live trading: broker pair picker + suffix-tolerant data feeds
+
+User: "I can manually trade BTCUSD on cTrader but the bot says invalid pair."
+Root cause is name resolution: the engine maps the ticker to the broker's Open
+API symbolName by exact normalized match, and brokers often suffix crypto
+(BTCUSD.d, ETHUSD.bit, …) that a plain ticker never matches. Instead of typing
+the pair, the Mini App now lists the account's real tradeable pairs.
+
+- Webapp (app/webapp/app.js): the "Run a setup" form replaces the free-text
+  pair input with a connection picker + a filterable <select> of the account's
+  pairs, populated from GET /trading/live/connections/{id}/symbols (cached per
+  connection for the session). The chosen connection_id is POSTed with the
+  execute request so the symbol always matches the armed account.
+- candle_alias() in live.py: broker symbols are normalized to Binance spot
+  pairs - strips / - and broker suffixes (.d/.bit/_x), maps {KNOWN}USD->USDT,
+  keeps existing USDT/USDC pairs, and leaves forex untouched. So a picked
+  BTCUSD.d still gets real candles/price instead of the synthetic fallback.
+- Tests: candle_alias (suffixes, slash/case, USDT passthrough, forex, bare
+  ticker). Tests: 257 (full suite).

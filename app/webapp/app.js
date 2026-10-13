@@ -8,6 +8,10 @@
   let token = null;
   let state = null;
 
+  // Broker tradeable pairs are fetched per connection and cached for the session.
+  const symbolsCache = {};
+  let liveConnChoice = null;
+
   const TELEGRAM = window.Telegram && window.Telegram.WebApp;
 
   function fmt(n, digits) {
@@ -446,6 +450,16 @@
           .join("")
       : '<option value="">No saved strategies — will use Momentum preset</option>';
 
+    const defaultConn = liveConnChoice || (conns.find((c) => c.is_live) || conns[0] || {}).id;
+    const connOptions = conns.length
+      ? conns
+          .map(
+            (c) =>
+              `<option value="${c.id}" ${c.id === defaultConn ? "selected" : ""}>${escapeHtml(c.label || c.platform || "cTrader")} · ${c.mode === "live" ? "💵 live" : "🧪 demo"} · ${escapeHtml(c.account_id)}</option>`
+          )
+          .join("")
+      : '<option value="">No connections</option>';
+
     const pending = trades.filter((t) => t.status === "PENDING_CONFIRM" || (t.awaiting_confirmation));
     const pendingRows = pending.length
       ? pending
@@ -495,7 +509,10 @@
       '<h4 class="section-h">Run a setup</h4>' +
       `<div class="live-form">
         <select id="liveStrategy" class="inp">${stratOptions}</select>
-        <input id="liveSymbol" class="inp" placeholder="Pair (e.g. BTCUSD)" value="BTCUSD" />
+        <select id="liveConn" class="inp">${connOptions}</select>
+        <div class="sub" id="liveSymbolHint" style="margin:2px 0">Loading broker pairs…</div>
+        <input id="liveSymbolFilter" class="inp" placeholder="Filter pairs (e.g. BTC)" />
+        <select id="liveSymbol" class="inp" disabled><option value="">Loading…</option></select>
         <button id="liveDryRun" class="btn">Dry-run preview</button>
         <button id="liveGo" class="btn btn-danger">Propose trade (confirm in Telegram)</button>
       </div>` +
@@ -524,6 +541,20 @@ $("#liveOAuthBtn") &&
       $("#liveDryRun").addEventListener("click", () => runLiveTrade(true));
     const go = $("#liveGo");
     go && go.addEventListener("click", () => runLiveTrade(false));
+    const liveConnSel = $("#liveConn");
+    const liveSymbolFilter = $("#liveSymbolFilter");
+    if (liveConnSel) {
+      liveConnSel.addEventListener("change", () => {
+        liveConnChoice = liveConnSel.value;
+        refreshBrokerSymbols(liveConnSel.value);
+      });
+      await refreshBrokerSymbols(liveConnSel.value);
+    }
+    liveSymbolFilter &&
+      liveSymbolFilter.addEventListener("input", () => {
+        const cached = symbolsCache[liveConnSel ? liveConnSel.value : ""];
+        if (cached) populateSymbolOptions(cached);
+      });
     panel.querySelectorAll("[data-arm]").forEach((b) =>
       b.addEventListener("click", () => armLiveConnection(b.dataset.arm))
     );
@@ -634,17 +665,82 @@ $("#liveOAuthBtn") &&
     }
   }
 
-  async function runLiveTrade(dry) {
-    const sym = (document.getElementById("liveSymbol") || {}).value || "BTCUSD";
-    const strat = (document.getElementById("liveStrategy") || {}).value || "momentum";
+  async function refreshBrokerSymbols(connectionId) {
+    const sel = $("#liveSymbol");
+    const hint = $("#liveSymbolHint");
+    if (!sel) return;
+    if (!connectionId) {
+      sel.innerHTML = '<option value="">No broker connection</option>';
+      sel.disabled = true;
+      if (hint) hint.textContent = "Connect a cTrader account to load its tradeable pairs.";
+      return;
+    }
+    if (symbolsCache[connectionId]) {
+      populateSymbolOptions(symbolsCache[connectionId]);
+      return;
+    }
+    sel.disabled = true;
+    sel.innerHTML = '<option value="">Loading…</option>';
+    if (hint) hint.textContent = "Loading pairs from your broker…";
     try {
+      const res = await api(
+        `/api/trading/live/connections/${connectionId}/symbols?limit=500`
+      );
+      const symbols = res.symbols || [];
+      symbolsCache[connectionId] = symbols;
+      populateSymbolOptions(symbols);
+    } catch (e) {
+      sel.innerHTML = '<option value="">Could not load pairs</option>';
+      if (hint) hint.textContent = "Could not load pairs: " + e.message;
+    }
+  }
+
+  function populateSymbolOptions(symbols) {
+    const sel = $("#liveSymbol");
+    const hint = $("#liveSymbolHint");
+    if (!sel) return;
+    if (!symbols.length) {
+      sel.innerHTML = '<option value="">No pairs available</option>';
+      sel.disabled = true;
+      if (hint) hint.textContent = "Your broker returned no tradeable pairs for this account.";
+      return;
+    }
+    const filter = (($("#liveSymbolFilter") || {}).value || "").trim().toUpperCase();
+    const shown = filter
+      ? symbols.filter((s) => s.toUpperCase().includes(filter))
+      : symbols;
+    const prev = sel.value;
+    sel.innerHTML = shown.length
+      ? shown.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("")
+      : '<option value="">No matching pairs</option>';
+    sel.disabled = shown.length === 0;
+    if (prev && shown.includes(prev)) sel.value = prev;
+    if (hint) {
+      const total = symbols.length;
+      hint.textContent =
+        `${shown.length} of ${total} tradeable pair${total === 1 ? "" : "s"} ` +
+        `from your broker account.`;
+    }
+  }
+
+  async function runLiveTrade(dry) {
+    const sym = ((document.getElementById("liveSymbol") || {}).value || "").trim();
+    const strat = (document.getElementById("liveStrategy") || {}).value || "momentum";
+    const connId = (document.getElementById("liveConn") || {}).value || "";
+    if (!sym) {
+      showError("Pick a tradeable pair from the list first.");
+      return;
+    }
+    try {
+      const body = {
+        symbol: sym.toUpperCase(),
+        strategy_key: strat,
+        dry_run: dry,
+      };
+      if (connId) body.connection_id = Number(connId);
       const res = await api("/api/trading/live/execute", {
         method: "POST",
-        body: JSON.stringify({
-          symbol: sym.trim().toUpperCase(),
-          strategy_key: strat,
-          dry_run: dry,
-        }),
+        body: JSON.stringify(body),
       });
       if (res.awaiting_confirmation) {
         showError("Proposal sent — confirm it in Telegram (✅ Confirm). Nothing was placed.");
