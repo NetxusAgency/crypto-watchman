@@ -606,3 +606,27 @@ is often exposed under suffixed names (BTCUSD.d, BTCUSD.bit, â€¦) so a plain
   through the same self-healing pipeline.
 - Tests: 242 (full suite).
 
+
+## 2H.16 — ICT Liquidity Sweep + MSS + FVG default preset (direction-agnostic)
+
+User pasted their Binance ICT strategy: liquidity sweep -> MSS -> displacement ->
+FVG -> CE entry, session gating, sweep-extreme stop, 2R+/2.5R targets. The old
+presets only ever produced longs (AUTO resolved to trend bias, 'general' required
+BULLISH, the heuristic demanded BULLISH) — the new strategy must be judged purely
+by price structure, both directions.
+
+- StrategySpec gains evaluate_both: evaluates LONG and SHORT independently and
+  returns whichever side's full sequence confirms (ties: better R:R). Direction
+  no longer comes from EMA/RSI/MACD bias.
+- New preset 'ict_liquidity' (trading engine): session window (London 07-10 / NY
+  13-16 UTC only), sweep of PDL/Asian/equal-swing pools, MSS, displacement
+  (body >= 1.5x avg, decisive close), unmitigated FVG (CE entry), volatility
+  fail-safe (no trade if last range > 3x ATR).
+- Plan math is now strategy-aware: entry = FVG midpoint (CE limit), SL = sweep
+  extreme -/+ max(1 tick, 0.10x ATR), TP1 = internal liquidity >= 2R, TP2 =
+  external liquidity >= 2R (2.5R preferred) — carried on StrategySignal.ict and
+  consumed by build_trade_plan; other strategies keep the old generic levels.
+- Same strategy seeded in the assistant PRESET_STRATEGIES (Telegram/dashboard). 
+- New tests: bullish setup -> LONG, bearish setup -> SHORT, clean uptrend with
+  BULLISH bias -> FLAT (proves structure, not bias, decides), LONG/SHORT plan
+  level ordering with RR >= 2.0. Tests: 247 (full suite).

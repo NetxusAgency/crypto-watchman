@@ -1,5 +1,6 @@
 import math
 import random
+from datetime import datetime, timezone
 
 from app.services.assistant.indicators import Candle
 from app.services.trading import (
@@ -335,3 +336,107 @@ class TestRiskEngine:
         risk_dollars = size * abs(plan.stop_loss - plan.entry_high)
         assert risk_dollars <= 200.0
         assert size * plan.entry_high <= 10000.0
+
+
+# --------------------------------------------------------------------------- #
+# ICT Liquidity Sweep + MSS + FVG preset tests.
+# --------------------------------------------------------------------------- #
+def _ict_bullish_plan():
+    """Range building equal lows, then sweep -> displacement (MSS) -> FVG (CE)."""
+    rows = []
+    prev = 100.0
+    for i in range(45):
+        c = 100.0 + 0.55 * math.sin(i / 3.0)
+        rows.append((prev, c + 0.05, c - 0.05, c))
+        prev = c
+    base0 = prev
+    rows.append((base0 + 0.02, base0 + 0.08, base0 - 0.10, base0 + 0.02))   # quiet
+    rows.append((base0 + 0.02, base0 + 0.05, base0 - 1.20, base0 - 0.60))   # SWEEP below pool
+    rows.append((base0 - 0.60, base0 + 0.95, base0 - 0.65, base0 + 0.85))   # displacement / MSS
+    rows.append((base0 + 0.55, base0 + 0.65, base0 + 0.22, base0 + 0.28))   # c3, close inside gap
+    return rows
+
+
+def _ict_bearish_plan():
+    """Mirror-image sweep -> displacement -> FVG for the SHORT side."""
+    bull = _ict_bullish_plan()
+    mid = 100.5
+    return [
+        (round(2 * mid - o, 6), round(2 * mid - l, 6), round(2 * mid - h, 6), round(2 * mid - c, 6))
+        for (o, h, l, c) in bull
+    ]
+
+
+def _ict_climb_plan(n=50):
+    """A clean, steady uptrend: bullish bias but no sweep/MSS/FVG structure."""
+    rows = []
+    prev = 100.0
+    for i in range(n):
+        c = prev + 0.05 + 0.02 * math.sin(i / 4.0)
+        rows.append((prev + 0.01, c + 0.10, c - 0.10, c))
+        prev = c
+    return rows
+
+
+def _ict_candles(plan, start_hour=13):
+    """Hourly candles starting at `start_hour` UTC; with 49 bars the last is 13:00 UTC."""
+    candles = []
+    base_ts = int(
+        datetime(2024, 1, 1, start_hour, 0, 0, tzinfo=timezone.utc).timestamp() * 1000
+    )
+    for i, (o, h, l, c) in enumerate(plan):
+        candles.append(
+            Candle(
+                timestamp=base_ts + i * 3_600_000,
+                open=round(o, 6),
+                high=round(h, 6),
+                low=round(l, 6),
+                close=round(c, 6),
+                volume=1000.0,
+            )
+        )
+    return candles
+
+
+class TestICTLiquidity:
+    def _signal(self, plan):
+        spec = preset_specs()["ict_liquidity"]
+        return evaluate_signal("BTC", "5m", spec, _ict_candles(plan))
+
+    def test_bullish_sweep_mss_fvg_confirms_long(self):
+        sig = self._signal(_ict_bullish_plan())
+        assert sig.setup_confirmed is True
+        assert sig.direction == "LONG"
+        assert sig.ict is not None
+        assert sig.entry_rules_passed == sig.entry_rules_total == 6
+
+    def test_bearish_sweep_mss_fvg_confirms_short(self):
+        sig = self._signal(_ict_bearish_plan())
+        assert sig.setup_confirmed is True
+        assert sig.direction == "SHORT"
+        assert sig.ict is not None
+
+    def test_uptrend_without_structure_does_not_force_long(self):
+        plan = _ict_climb_plan()
+        ctx = build_market_context("BTC", "5m", _ict_candles(plan))
+        assert ctx.snapshot.trend_bias == "BULLISH"
+        sig = self._signal(plan)
+        assert sig.setup_confirmed is False
+        assert sig.direction == "FLAT"
+
+    def test_long_plan_levels_ordered(self):
+        sig = self._signal(_ict_bullish_plan())
+        plan = build_trade_plan(sig, preset_specs()["ict_liquidity"])
+        assert plan is not None
+        assert plan.direction == "LONG"
+        assert plan.entry_type == "LIMIT"
+        assert plan.stop_loss < plan.entry_low == plan.entry_high < plan.take_profits[0] < plan.take_profits[1]
+        assert plan.risk_reward >= 2.0
+
+    def test_short_plan_levels_ordered(self):
+        sig = self._signal(_ict_bearish_plan())
+        plan = build_trade_plan(sig, preset_specs()["ict_liquidity"])
+        assert plan is not None
+        assert plan.direction == "SHORT"
+        assert plan.stop_loss > plan.entry_high >= plan.entry_low > plan.take_profits[0] > plan.take_profits[1]
+        assert plan.risk_reward >= 2.0

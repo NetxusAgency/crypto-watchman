@@ -134,6 +134,49 @@ def build_trade_plan(signal: StrategySignal, spec: StrategySpec | None = None) -
         return None
 
     ctx = signal.context
+
+    # ICT setup: entry at the FVG consequential encroachment (CE limit), stop
+    # beyond the swept liquidity extreme, TP1 at internal liquidity (>=2R,
+    # 50% off + breakeven) and TP2 at external liquidity (>=2.5R preferred).
+    if signal.ict:
+        lv = signal.ict
+        direction = signal.direction.upper()
+        if direction not in ("LONG", "SHORT"):
+            return None
+        entry = _round4(float(lv["entry"]))
+        stop = _round4(float(lv["stop"]))
+        tps = [_round4(float(t)) for t in lv["take_profits"]]
+        if not tps or stop <= 0 or entry <= 0:
+            return None
+        rr = max(float(lv.get("risk_reward", 2.0)), 1.0)
+        reasons = [r.detail for r in signal.rule_results if r.passed][:6]
+        extreme = _round4(float(lv["sweep_level"]))
+        side = "below" if direction == "LONG" else "above"
+        invalidation = (
+            f"Liquidity sweep of {extreme:,.4f} ({lv.get('liquidity_tag', '')}); "
+            f"close {side} {stop:,.4f} invalidates the {direction} setup."
+        )
+        return TradePlan(
+            symbol=signal.symbol,
+            direction=direction,
+            timeframe=signal.timeframe,
+            strategy_key=signal.strategy_key,
+            strategy_name=signal.strategy_name,
+            entry_type="LIMIT",
+            entry_low=entry,
+            entry_high=entry,
+            stop_loss=stop,
+            take_profits=[] if not tps else [tps[0], tps[-1]],
+            invalidation=invalidation,
+            risk_reward=rr,
+            setup_status="VALID",
+            stage=TradePlanStage.SETUP_FOUND,
+            confidence=70,
+            signal_reason=reasons,
+            rule_results=signal.rule_results,
+            context=ctx.to_dict(),
+        )
+
     sn = ctx.snapshot
     price = sn.current_price
     atr = sn.atr_14 or price * 0.02

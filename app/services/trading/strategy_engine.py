@@ -117,6 +117,7 @@ class StrategySpec:
     take_profit_rules: list[dict] = field(default_factory=list)
     risk_rules: list[dict] = field(default_factory=list)
     direction: str = "AUTO"  # AUTO | LONG | SHORT
+    evaluate_both: bool = False  # evaluate LONG and SHORT independently, pick the confirming side
 
     def to_json(self) -> dict:
         return {
@@ -130,6 +131,7 @@ class StrategySpec:
             "take_profit_rules": self.take_profit_rules,
             "risk_rules": self.risk_rules,
             "direction": self.direction,
+            "evaluate_both": self.evaluate_both,
         }
 
 
@@ -233,6 +235,35 @@ def preset_specs() -> dict[str, StrategySpec]:
             take_profit_rules=[{"method": "next_resistance"}, {"method": "rr_multiple", "r": 1.5}],
             risk_rules=[{"name": "Minimum R:R", "check": "min_rr", "params": {"value": 1.2}}],
         ),
+        "ict_liquidity": StrategySpec(
+            key="ict_liquidity",
+            name="ICT Liquidity Sweep + MSS + FVG",
+            description=(
+                "Direction-agnostic smart-money setup: price sweeps a liquidity pool "
+                "(prior-day / Asian / equal swing highs-lows), shifts market structure, "
+                "prints a displacement candle, then leaves an unmitigated fair value gap "
+                "(FVG) whose midpoint (CE) is the limit entry. Stop beyond the sweep "
+                "extreme; TP1 at internal liquidity (≥2R, 50% off + breakeven), TP2 at "
+                "2.5R+ external liquidity. Entries only inside London/NY session windows."
+            ),
+            timeframes=["1m", "5m", "1h"],
+            indicators={"atr": True},
+            entry_rules=[
+                {"name": "UTC session window (London/NY)", "check": "utc_session_open"},
+                {"name": "Liquidity sweep & reclaim", "check": "ict_sweep"},
+                {"name": "Market structure shift (MSS)", "check": "ict_mss"},
+                {"name": "Displacement candle", "check": "ict_displacement"},
+                {"name": "Unmitigated fair value gap", "check": "ict_fvg"},
+                {"name": "Range fail-safe (<3x ATR)", "check": "volatility_calmer"},
+            ],
+            stop_loss_rules=[{"method": "beyond_sweep_extreme"}],
+            take_profit_rules=[
+                {"method": "internal_liquidity", "r": 2.0},
+                {"method": "external_liquidity", "r": 2.5},
+            ],
+            risk_rules=[{"name": "Minimum R:R", "check": "min_rr", "params": {"value": 2.0}}],
+            evaluate_both=True,
+        ),
     }
     return _Presets._cache
 
@@ -294,6 +325,387 @@ def _c_check_min_rr(ctx: MarketContext, params: dict) -> tuple[bool, str]:
     reward = risk * value
     rr = round(reward / risk, 2)
     return rr >= value, f"Engineered R:R {rr} >= {value}"
+
+
+# --------------------------------------------------------------------------- #
+# ICT Liquidity Sweep + MSS + FVG structure helpers (direction-agnostic).
+# --------------------------------------------------------------------------- #
+_ICT_CHECKS = {"ict_sweep", "ict_mss", "ict_displacement", "ict_fvg"}
+
+# Approx UTC day bucket so prior-day / Asian levels can be derived from any
+# intraday candle feed (timestamps are epoch ms).
+_DAY_MS = 86_400_000
+
+
+def _utc_hour(ts_ms: int) -> int:
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).hour
+
+
+def _day_label(ts_ms: int) -> int:
+    return ts_ms // _DAY_MS
+
+
+def _swing_pivots(
+    candles: list[Candle], left: int = 2, right: int = 2
+) -> tuple[list[tuple[int, float]], list[tuple[int, float]]]:
+    """Fractal (left/right bars) swing highs and lows as (index, price) pairs."""
+    highs: list[tuple[int, float]] = []
+    lows: list[tuple[int, float]] = []
+    n = len(candles)
+    for i in range(left, n - right):
+        before = range(i - left, i)
+        after = range(i + 1, i + right + 1)
+        if all(candles[i].high > candles[j].high for j in (*before, *after)):
+            highs.append((i, candles[i].high))
+        if all(candles[i].low < candles[j].low for j in (*before, *after)):
+            lows.append((i, candles[i].low))
+    return highs, lows
+
+
+def _cluster_levels(values: list[float], tol: float) -> list[float]:
+    """Merge nearby prices into equal-level liquidity pools (returns mid values)."""
+    if not values:
+        return []
+    clusters: list[list[float]] = []
+    for v in sorted(values):
+        if clusters and v - clusters[-1][-1] <= tol:
+            clusters[-1].append(v)
+        else:
+            clusters.append([v])
+    return [round(sum(c) / len(c), 6) for c in clusters]
+
+
+def _liquidity_sides(
+    ctx: MarketContext, direction: str
+) -> tuple[list[tuple[float, str]], list[tuple[float, str]]]:
+    """Return (sweep-side pools, target-side pools) as (price, tag) tuples.
+
+    LONG: sweep pools below price (PDL / Asian low / equal lows); targets above.
+    SHORT: sweep pools above price (PDH / Asian high / equal highs); targets below.
+    """
+    candles = ctx.candles
+    px = _price(ctx)
+    n = len(candles)
+    if n < 8 or px <= 0:
+        return [], []
+    atr = ctx.snapshot.atr_14 or px * 0.02 or 1.0
+    last_day = _day_label(candles[-1].timestamp)
+    prev = [c for c in candles if _day_label(c.timestamp) == last_day - 1]
+    asia = [
+        c for c in candles
+        if _day_label(c.timestamp) == last_day and _utc_hour(c.timestamp) in (0, 1, 2, 3, 4)
+    ]
+    highs, lows = _swing_pivots(candles)
+
+    if direction == "LONG":
+        sweep_pools: list[tuple[float, str]] = []
+        for tag, val in (
+            ("PDL", min((c.low for c in prev), default=None)),
+            ("AL", min((c.low for c in asia), default=None)),
+        ):
+            if val is not None and val < px:
+                sweep_pools.append((round(val, 6), tag))
+        recent_lows = [p for (i, p) in lows if i >= n - 48 and p < px]
+        saw_liquidity = False
+        for mid in _cluster_levels(recent_lows, 0.10 * atr):
+            if mid < px:
+                sweep_pools.append((mid, "EQ"))
+                saw_liquidity = True
+        if not sweep_pools and not saw_liquidity:
+            sweep_pools.append((round(min(c.low for c in candles[-20:]), 6), "SW"))
+        sweep_pools.sort(key=lambda x: x[0], reverse=True)
+        target_pools: list[tuple[float, str]] = []
+        for tag, val in (
+            ("PDH", max((c.high for c in prev), default=None)),
+            ("AH", max((c.high for c in asia), default=None)),
+        ):
+            if val is not None and val > px:
+                target_pools.append((round(val, 6), tag))
+        recent_highs = [p for (i, p) in highs if i >= n - 48 and p > px]
+        for mid in _cluster_levels(recent_highs, 0.10 * atr):
+            if mid > px:
+                target_pools.append((mid, "EQ"))
+        target_pools.sort()
+        return sweep_pools, target_pools
+
+    sweep_pools = []
+    for tag, val in (
+        ("PDH", max((c.high for c in prev), default=None)),
+        ("AH", max((c.high for c in asia), default=None)),
+    ):
+        if val is not None and val > px:
+            sweep_pools.append((round(val, 6), tag))
+    recent_highs = [p for (i, p) in highs if i >= n - 48 and p > px]
+    buy_liquidity = False
+    for mid in _cluster_levels(recent_highs, 0.10 * atr):
+        if mid > px:
+            sweep_pools.append((mid, "EQ"))
+            buy_liquidity = True
+    if not sweep_pools and not buy_liquidity:
+        sweep_pools.append((round(max(c.high for c in candles[-20:]), 6), "SW"))
+    sweep_pools.sort(key=lambda x: x[0])
+    target_pools = []
+    for tag, val in (
+        ("PDL", min((c.low for c in prev), default=None)),
+        ("AL", min((c.low for c in asia), default=None)),
+    ):
+        if val is not None and val < px:
+            target_pools.append((round(val, 6), tag))
+    recent_lows = [p for (i, p) in lows if i >= n - 48 and p < px]
+    for mid in _cluster_levels(recent_lows, 0.10 * atr):
+        if mid < px:
+            target_pools.append((mid, "EQ"))
+    target_pools.sort(reverse=True)
+    return sweep_pools, target_pools
+
+
+def _ict_sweep_hit(
+    ctx: MarketContext, sweep_pools: list[tuple[float, str]], direction: str
+) -> dict | None:
+    """A recent candle wicks beyond a liquidity pool and price reclaims it."""
+    candles = ctx.candles
+    n = len(candles)
+    if n < 3:
+        return None
+    px = _price(ctx)
+    start = n - 3
+    if direction == "LONG":
+        for lvl, tag in sweep_pools:
+            hits = [i for i in range(start, n) if candles[i].low < lvl]
+            if hits and px > lvl:
+                return {
+                    "level": lvl,
+                    "tag": tag,
+                    "sweep_idx": max(hits),
+                    "sweep_price": min(candles[i].low for i in hits),
+                }
+        return None
+    for lvl, tag in sweep_pools:
+        hits = [i for i in range(start, n) if candles[i].high > lvl]
+        if hits and px < lvl:
+            return {
+                "level": lvl,
+                "tag": tag,
+                "sweep_idx": max(hits),
+                "sweep_price": max(candles[i].high for i in hits),
+            }
+    return None
+
+
+def _ict_mss_after(ctx: MarketContext, sweep: dict, direction: str) -> dict | None:
+    """Close beyond the most recent prior swing (low/high) after the sweep: MSS."""
+    candles = ctx.candles
+    n = len(candles)
+    highs, lows = _swing_pivots(candles)
+    if direction == "LONG":
+        refs = [p for (i, p) in highs if i < sweep["sweep_idx"]]
+        if not refs:
+            return None
+        ref = max(refs)
+        for j in range(sweep["sweep_idx"] + 1, n):
+            if candles[j].close > ref:
+                return {"ref": ref, "idx": j, "price": candles[j].close}
+        return None
+    refs = [p for (i, p) in lows if i < sweep["sweep_idx"]]
+    if not refs:
+        return None
+    ref = min(refs)
+    for j in range(sweep["sweep_idx"] + 1, n):
+        if candles[j].close < ref:
+            return {"ref": ref, "idx": j, "price": candles[j].close}
+    return None
+
+
+def _ict_displacement(ctx: MarketContext, sweep: dict, direction: str) -> dict | None:
+    """A candle after the sweep with body >= 1.5x the 10-bar average body and a
+    decisive close (upper 70% of range for longs, lower 30% for shorts)."""
+    candles = ctx.candles
+    n = len(candles)
+    i0 = max(0, n - 14)
+    bodies = [abs(c.close - c.open) for c in candles[i0 : n - 3]]
+    avg_body = _mean(bodies) or ((ctx.snapshot.atr_14 or 1.0) * 0.3)
+    start = min(sweep["sweep_idx"] + 1, n - 1)
+    for j in range(start, n):
+        c = candles[j]
+        rng = max(c.high - c.low, 1e-9)
+        body = abs(c.close - c.open)
+        if body < 1.5 * avg_body:
+            continue
+        if direction == "LONG":
+            if c.close >= c.low + 0.70 * (c.high - c.low):
+                return {"idx": j, "body": body}
+        elif direction == "SHORT" and c.close <= c.low + 0.30 * (c.high - c.low):
+            return {"idx": j, "body": body}
+    return None
+
+
+def _ict_fvg(ctx: MarketContext, sweep: dict, direction: str) -> dict | None:
+    """Find the fair value gap: the displacement candle leaves one. For longs the
+    gap is candle1.high < candle3.low; CE (entry) = mid of the gap zone."""
+    candles = ctx.candles
+    n = len(candles)
+    atr = ctx.snapshot.atr_14 or _price(ctx) * 0.02 or 1.0
+    px = _price(ctx)
+    for i in range(sweep["sweep_idx"], n - 2):
+        c1, c3 = candles[i], candles[i + 2]
+        if direction == "LONG":
+            if not (c1.high < c3.low):
+                continue
+            bottom, top = c1.high, c3.low
+        else:
+            if not (c1.low > c3.high):
+                continue
+            top, bottom = c1.low, c3.high
+        ce = (top + bottom) / 2.0
+        # Unmitigated: price still near the CE and has not run through the zone.
+        if not (bottom - atr * 0.25 <= px <= top + atr * 0.25):
+            continue
+        if n - 1 - (i + 2) > 1:
+            continue
+        return {"c1": i, "c2": i + 1, "c3": i + 2, "bottom": bottom, "top": top, "ce": ce}
+    return None
+
+
+def _ict_analysis(ctx: MarketContext, direction: str) -> dict | None:
+    """Full ICT sequence for one direction, or None when the structure is absent."""
+    if direction not in ("LONG", "SHORT"):
+        return None
+    sweep_pools, target_pools = _liquidity_sides(ctx, direction)
+    sweep = _ict_sweep_hit(ctx, sweep_pools, direction)
+    if not sweep:
+        return None
+    mss = _ict_mss_after(ctx, sweep, direction)
+    if not mss:
+        return None
+    displacement = _ict_displacement(ctx, sweep, direction)
+    if not displacement:
+        return None
+    fvg = _ict_fvg(ctx, sweep, direction)
+    if not fvg or fvg["c2"] != displacement["idx"]:
+        return None
+    return {
+        "direction": direction,
+        "sweep": sweep,
+        "mss": mss,
+        "displacement": displacement,
+        "fvg": fvg,
+        "target_pools": target_pools,
+    }
+
+
+def _ict_plan_levels(ctx: MarketContext, ict: dict, direction: str) -> dict | None:
+    """Derive entry (CE limit), stop (beyond sweep extreme) and 2R+/2.5R+ targets."""
+    px = _price(ctx) or 0.0
+    if px <= 0:
+        return None
+    atr = ctx.snapshot.atr_14 or px * 0.02 or 1.0
+    fvg = ict["fvg"]
+    entry = fvg["ce"]
+    sweep_price = ict["sweep"]["sweep_price"]
+    buffer = max(px * 0.0001, 0.10 * atr)
+    if direction == "LONG" and entry - sweep_price > 0:
+        stop = sweep_price - buffer
+        risk = max(entry - stop, px * 0.001)
+    elif direction == "SHORT" and sweep_price - entry > 0:
+        stop = sweep_price + buffer
+        risk = max(stop - entry, px * 0.001)
+    else:
+        return None
+
+    pools = [p for (p, _tag) in ict["target_pools"]]
+    tps: list[float] = []
+    if direction == "LONG":
+        for p in sorted(p for p in pools if p > entry):
+            rr = (p - entry) / risk
+            if rr >= 2.5 and len(tps) == 1:
+                tps.append(p)
+                break
+            if rr >= 2.0 and not tps:
+                tps.append(p)
+    else:
+        for p in sorted((p for p in pools if p < entry), reverse=True):
+            rr = (entry - p) / risk
+            if rr >= 2.5 and len(tps) == 1:
+                tps.append(p)
+                break
+            if rr >= 2.0 and not tps:
+                tps.append(p)
+    if not tps:
+        tps.append(entry + (2.0 * risk if direction == "LONG" else -2.0 * risk))
+    if len(tps) == 1:
+        tps.append(tps[0] + (risk if direction == "LONG" else -risk))
+    tp1, tp2 = tps[0], tps[1]
+    risk_reward = round(abs(tp1 - entry) / risk, 2)
+    return {
+        "entry": round(entry, 6),
+        "stop": round(stop, 6),
+        "take_profits": [round(tp1, 6), round(tp2, 6)],
+        "risk_reward": max(risk_reward, 2.0),
+        "sweep_level": ict["sweep"]["level"],
+        "liquidity_tag": ict["sweep"]["tag"],
+        "ce": round(entry, 6),
+    }
+
+
+def _c_utc_session_open(ctx: MarketContext, params: dict) -> tuple[bool, str]:
+    if not ctx.candles:
+        return False, "No candle data for session window."
+    hour = _utc_hour(ctx.candles[-1].timestamp)
+    name = ("London open" if hour in (7, 8, 9)
+            else ("New York open" if hour in (13, 14, 15) else ""))
+    ok = bool(name)
+    return ok, (
+        f"UTC hour {hour:02d}:00 inside {name} window (07–10 London / 13–16 NY) — entries allowed"
+        if ok else f"UTC hour {hour:02d}:00 outside London/NY session — no entries"
+    )
+
+
+def _c_volatility_calmer(ctx: MarketContext, params: dict) -> tuple[bool, str]:
+    if not ctx.candles:
+        return False, "No candle data."
+    last = ctx.candles[-1]
+    rng = max(last.high - last.low, 0.0)
+    atr = ctx.snapshot.atr_14 or rng or _price(ctx) * 0.02 or 1.0
+    ok = rng <= 3.0 * atr
+    return ok, f"Last range {rng:.4f} ≤ 3×ATR {3.0 * atr:.4f} (fail-safe: no entry in >3×ATR expansion)"
+
+
+def _c_ict_sweep(ctx: MarketContext, params: dict) -> tuple[bool, str]:
+    st = params.get("_ict")
+    direction = params.get("direction", "LONG")
+    if not st:
+        return False, f"No {direction} liquidity sweep (pool pierced and reclaimed within 3 candles)."
+    s = st["sweep"]
+    return True, f"{direction}: {s['tag']} liquidity {s['level']:,.4f} swept to {s['sweep_price']:,.4f} and reclaimed"
+
+
+def _c_ict_mss(ctx: MarketContext, params: dict) -> tuple[bool, str]:
+    st = params.get("_ict")
+    direction = params.get("direction", "LONG")
+    if not st or not st.get("mss"):
+        return False, f"No {direction} market structure shift yet."
+    m = st["mss"]
+    return True, f"{direction} MSS: close {m['price']:,.4f} beyond prior swing {m['ref']:,.4f}"
+
+
+def _c_ict_displacement(ctx: MarketContext, params: dict) -> tuple[bool, str]:
+    st = params.get("_ict")
+    direction = params.get("direction", "LONG")
+    if not st or not st.get("displacement"):
+        return False, f"No {direction} displacement candle (body ≥1.5× average, decisive close)."
+    d = st["displacement"]
+    return True, f"{direction} displacement body {d['body']:,.4f} at bar {d['idx']}"
+
+
+def _c_ict_fvg(ctx: MarketContext, params: dict) -> tuple[bool, str]:
+    st = params.get("_ict")
+    direction = params.get("direction", "LONG")
+    if not st or not st.get("fvg"):
+        return False, f"No unmitigated {direction} fair value gap (FVG)."
+    f = st["fvg"]
+    return True, f"{direction} FVG {f['bottom']:,.4f}–{f['top']:,.4f} (CE {f['ce']:,.4f}) at bar {f['c2']}"
 
 
 _CHECKS: dict[str, Callable[[MarketContext, dict], tuple[bool, str]]] = {
@@ -389,6 +801,12 @@ _CHECKS: dict[str, Callable[[MarketContext, dict], tuple[bool, str]]] = {
         ctx.latest_candle_age_hrs is not None and ctx.latest_candle_age_hrs <= 48,
         f"Latest candle age {ctx.latest_candle_age_hrs} h",
     ),
+    "utc_session_open": _c_utc_session_open,
+    "volatility_calmer": _c_volatility_calmer,
+    "ict_sweep": _c_ict_sweep,
+    "ict_mss": _c_ict_mss,
+    "ict_displacement": _c_ict_displacement,
+    "ict_fvg": _c_ict_fvg,
 }
 
 
@@ -440,9 +858,14 @@ def _swing_break(ctx: MarketContext, which: str, lookback: int) -> tuple[bool, s
 
 
 def _apply_direction(
-    check: str, params: dict, direction: str
+    check: str,
+    params: dict,
+    direction: str,
+    ict_structure: dict | None = None,
 ) -> tuple[str, dict]:
     """Flip a check for SHORT evaluation. LONG keeps it as-is."""
+    if check in _ICT_CHECKS:
+        return check, {**params, "direction": direction, "_ict": ict_structure}
     if direction != "SHORT":
         return check, params
     if check == "trend_is":
@@ -466,6 +889,7 @@ class StrategySignal:
     blocked_reasons: list[str]
     context: MarketContext
     heuristic: bool = False
+    ict: dict | None = None  # ICT plan levels (CE entry, sweep stop, 2R+ targets)
 
     def to_dict(self) -> dict:
         return {
@@ -481,6 +905,7 @@ class StrategySignal:
             "blocked_reasons": self.blocked_reasons,
             "context": self.context.to_dict(),
             "heuristic": self.heuristic,
+            "ict": self.ict,
         }
 
 
@@ -527,23 +952,19 @@ def _heuristic_entry(
     return ok, reason, [rule]
 
 
-def evaluate_signal(
-    symbol: str,
-    timeframe: str,
+def _evaluate_one(
+    ctx: MarketContext,
     spec: StrategySpec,
-    candles: Sequence[Candle],
-    *,
-    direction_override: str | None = None,
+    direction: str,
 ) -> StrategySignal:
-    """Run a strategy over a candle series and return a deterministic signal."""
-    ctx = build_market_context(symbol, timeframe, candles)
-    direction = (direction_override or spec.direction or "AUTO").upper()
-    if direction in ("LONG", "SHORT"):
-        pass
-    else:
-        direction = _resolve_direction(spec, ctx)
-
+    """Evaluate a strategy for a single resolved direction."""
     rules = list(spec.entry_rules)
+    ict_structure = None
+    if direction in ("LONG", "SHORT") and any(
+        str(rule.get("check", "")) in _ICT_CHECKS for rule in rules
+    ):
+        ict_structure = _ict_analysis(ctx, direction)
+
     if not rules:
         ok, reason, results = _heuristic_entry(spec.key, ctx, direction)
         if direction == "FLAT":
@@ -551,7 +972,7 @@ def evaluate_signal(
             reason = "No dominant directional structure — no entry."
         return StrategySignal(
             symbol=ctx.symbol,
-            timeframe=timeframe,
+            timeframe=ctx.timeframe,
             strategy_key=spec.key,
             strategy_name=spec.name,
             direction="FLAT" if direction == "FLAT" else direction,
@@ -568,7 +989,7 @@ def evaluate_signal(
     for rule in rules:
         check = str(rule.get("check", ""))
         params = dict(rule.get("params") or {})
-        final_check, final_params = _apply_direction(check, params, direction)
+        final_check, final_params = _apply_direction(check, params, direction, ict_structure)
         evaluator = _CHECKS.get(final_check)
         if evaluator is None:
             results.append(RuleResult(rule.get("name", check), check, True, "No-op (unknown rule)"))
@@ -583,9 +1004,9 @@ def evaluate_signal(
         confirmed = False
         blocked.insert(0, "No dominant directional market structure.")
 
-    return StrategySignal(
+    signal = StrategySignal(
         symbol=ctx.symbol,
-        timeframe=timeframe,
+        timeframe=ctx.timeframe,
         strategy_key=spec.key,
         strategy_name=spec.name,
         direction="FLAT" if direction == "FLAT" else direction,
@@ -596,3 +1017,54 @@ def evaluate_signal(
         blocked_reasons=blocked,
         context=ctx,
     )
+    if confirmed and ict_structure is not None:
+        levels = _ict_plan_levels(ctx, ict_structure, direction)
+        if levels:
+            signal.ict = levels
+    return signal
+
+
+def evaluate_signal(
+    symbol: str,
+    timeframe: str,
+    spec: StrategySpec,
+    candles: Sequence[Candle],
+    *,
+    direction_override: str | None = None,
+) -> StrategySignal:
+    """Run a strategy over a candle series and return a deterministic signal.
+
+    `spec.evaluate_both` evaluates LONG and SHORT independently and returns the
+    side whose full sequence (liquidity sweep → MSS → displacement → FVG)
+    confirms, so structure decides — never a pre-baked market bias.
+    """
+    ctx = build_market_context(symbol, timeframe, candles)
+    requested = (direction_override or spec.direction or "AUTO").upper()
+    if requested in ("LONG", "SHORT"):
+        return _evaluate_one(ctx, spec, requested)
+    if spec.evaluate_both:
+        long_sig = _evaluate_one(ctx, spec, "LONG")
+        short_sig = _evaluate_one(ctx, spec, "SHORT")
+        if long_sig.setup_confirmed and short_sig.setup_confirmed:
+            lr = (long_sig.ict or {}).get("risk_reward", 0.0) if long_sig.ict else 0.0
+            sr = (short_sig.ict or {}).get("risk_reward", 0.0) if short_sig.ict else 0.0
+            return long_sig if lr >= sr else short_sig
+        if long_sig.setup_confirmed:
+            return long_sig
+        if short_sig.setup_confirmed:
+            return short_sig
+        return StrategySignal(
+            symbol=ctx.symbol,
+            timeframe=timeframe,
+            strategy_key=spec.key,
+            strategy_name=spec.name,
+            direction="FLAT",
+            setup_confirmed=False,
+            entry_rules_passed=long_sig.entry_rules_passed + short_sig.entry_rules_passed,
+            entry_rules_total=long_sig.entry_rules_total + short_sig.entry_rules_total,
+            rule_results=long_sig.rule_results + short_sig.rule_results,
+            blocked_reasons=(long_sig.blocked_reasons or []) + (short_sig.blocked_reasons or []),
+            context=ctx,
+        )
+    direction = _resolve_direction(spec, ctx)
+    return _evaluate_one(ctx, spec, direction)

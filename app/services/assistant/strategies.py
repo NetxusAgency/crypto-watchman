@@ -73,6 +73,34 @@ PRESET_STRATEGIES: list[StrategyDefinition] = [
             "Entry Zone, Stop Loss, TP1, TP2, and calculated Risk:Reward ratio."
         ),
     ),
+    StrategyDefinition(
+        key="ict_liquidity",
+        name="ICT Liquidity Sweep + MSS + FVG",
+        description=(
+            "Direction-agnostic smart-money setup: a liquidity pool (PDH/PDL, Asian high/low, "
+            "equal swing highs/lows) is swept and reclaimed, market structure shifts, price "
+            "prints a displacement candle, then enters at the fair value gap (FVG) after "
+            "consequent encroachment. Longs and shorts are judged by the same price structure."
+        ),
+        timeframes="1m,5m,1h",
+        indicators="OHLC structure,ATR14",
+        rules=(
+            "ENTRY ONLY inside London (07:00-10:00 UTC) or New York (13:00-16:00 UTC) sessions. "
+            "Identify liquidity pools: prior day high/low, Asian range high/low (00:00-05:00 UTC), "
+            "and equal highs/lows within 0.10 x ATR(14). "
+            "A sweep occurs when a recent candle wicks beyond a pool and price reclaims it within 3 candles. "
+            "After the sweep, require a market structure shift (MSS): a close beyond the prior swing. "
+            "Then require a displacement candle: body at least 1.5x the 10-bar average body and a "
+            "decisive close (upper 70% of the range for longs, lower 30% for shorts). "
+            "Enter as a limit at the FVG midpoint (CE): for longs candle1.high < candle3.low; "
+            "for shorts candle1.low > candle3.high; the gap must be unmitigated. "
+            "SKIP when the setup is missing or the last candle range exceeds 3x ATR (volatility fail-safe). "
+            "Stop loss beyond the swept extreme plus max(1 tick, 0.10 x ATR). "
+            "TP1 at nearest internal liquidity at least 2R (close 50%, move stop to breakeven); "
+            "TP2 at external liquidity with at least 2.0R to 2.5R preferred. "
+            "Max 0.5% account risk per trade (1% cap). No position on a symbol that has no setup."
+        ),
+    ),
 ]
 
 STRATEGIES_MAP = {s.key: s for s in PRESET_STRATEGIES}
