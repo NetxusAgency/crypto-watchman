@@ -630,3 +630,26 @@ by price structure, both directions.
 - New tests: bullish setup -> LONG, bearish setup -> SHORT, clean uptrend with
   BULLISH bias -> FLAT (proves structure, not bias, decides), LONG/SHORT plan
   level ordering with RR >= 2.0. Tests: 247 (full suite).
+
+## 2H.17 - ICT multi-timeframe: 1H bias gate + 5M setup + 1M CE refinement
+
+Follow-up to 2H.16: the ICT preset now resolves across three timeframes instead
+of one - 1H bias gates the direction, the 5M chart produces the setup/sweep/MSS/
+FVG, and the 1M chart refines the entry CE inside the setup gap. A 50-bar 1H
+uptrend + bullish 5M sweep now confirms a LONG, while the same 5M setup under a
+BEARISH 1H is rejected (no force-fitting structure to a bias).
+
+- StrategySpec.new: bias_timeframe, setup_timeframe, entry_refine_timeframe
+  (ict_liquidity: 1h / 5m / 1m; all None for older presets -> unchanged).
+- evaluate_signal / PlanManager.evaluate accept higher_tf_candles and
+  entry_refine_candles; run_backtest passes both through.
+- New 'htf_bias' rule: LONG requires 1H BULLISH, SHORT requires 1H BEARISH,
+  NEUTRAL/missing HTF rejects the side. _apply_direction injects "_bias".
+- _ict_refine_entry: scans the 1M series for a same-direction FVG whose CE lies
+  inside (or touching) the 5M gap, with price still near the refined gap; on hit
+  the 1M CE replaces the setup CE (graceful fallback to the 5M CE otherwise).
+- live.py: entry timeframe comes from spec.setup_timeframe (fallback 4h); fetches
+  1H + 1M series when the strategy declares them and threads them into evaluate.
+- KlineFetcher INTERVAL_MAP + TwelveData mapping extended to 1m/5m.
+- New tests: 1H-bias gates LONG/SHORT/NEUTRAL setups, 1M CE refinement within
+  the setup zone (CE pulled from 100.61 -> 100.5546). Tests: 251 (full suite).

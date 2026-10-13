@@ -12,6 +12,8 @@ logger = logging.getLogger("crypto_watchman.assistant_klines")
 
 # Supported intervals mapped to standard formats
 INTERVAL_MAP = {
+    "1m": "1m",
+    "5m": "5m",
     "15m": "15m",
     "1h": "1h",
     "4h": "4h",
@@ -82,7 +84,7 @@ class KlineFetcher:
             return None
         try:
             formatted_sym = f"{symbol[:3]}/{symbol[3:]}"
-            td_interval = "15min" if interval == "15m" else ("1h" if interval == "1h" else ("4h" if interval == "4h" else "1day"))
+            td_interval = "1min" if interval == "1m" else ("5min" if interval == "5m" else ("15min" if interval == "15m" else ("1h" if interval == "1h" else ("4h" if interval == "4h" else "1day"))))
             url = (
                 f"https://api.twelvedata.com/time_series?symbol={formatted_sym}"
                 f"&interval={td_interval}&outputsize={limit}&apikey={settings.TWELVEDATA_API_KEY}"

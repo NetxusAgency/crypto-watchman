@@ -339,16 +339,35 @@ class LiveExecutionService:
             description="",
             timeframes=LIVE_TIMEFRAME,
         )
+        setup_tf = spec.setup_timeframe or LIVE_TIMEFRAME
         candles = candles_override if candles_override is not None else []
         if not candles and kline_source is not None:
-            candles = await kline_source.fetch_candles(symbol_alias, LIVE_TIMEFRAME, limit=200)
+            candles = await kline_source.fetch_candles(symbol_alias, setup_tf, limit=200)
         if not candles:
             return LiveExecutionResult(
                 allowed=False,
                 reason=f"No candle data available for {symbol} — could not build a setup.",
             ), None
 
-        proposed = self.manager.evaluate(symbol.upper(), LIVE_TIMEFRAME, spec, candles)
+        higher_tf_candles = None
+        if spec.bias_timeframe and kline_source is not None:
+            higher_tf_candles = await kline_source.fetch_candles(
+                symbol_alias, spec.bias_timeframe, limit=200
+            )
+        entry_refine_candles = None
+        if spec.entry_refine_timeframe and kline_source is not None:
+            entry_refine_candles = await kline_source.fetch_candles(
+                symbol_alias, spec.entry_refine_timeframe, limit=200
+            )
+
+        proposed = self.manager.evaluate(
+            symbol.upper(),
+            setup_tf,
+            spec,
+            candles,
+            higher_tf_candles=higher_tf_candles,
+            entry_refine_candles=entry_refine_candles,
+        )
         if proposed.plan is None:
             return LiveExecutionResult(
                 allowed=False,

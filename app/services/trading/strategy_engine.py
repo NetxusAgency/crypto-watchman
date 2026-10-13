@@ -118,6 +118,9 @@ class StrategySpec:
     risk_rules: list[dict] = field(default_factory=list)
     direction: str = "AUTO"  # AUTO | LONG | SHORT
     evaluate_both: bool = False  # evaluate LONG and SHORT independently, pick the confirming side
+    bias_timeframe: str | None = None  # higher timeframe used to gate direction (HTF bias)
+    setup_timeframe: str | None = None  # preferred timeframe for the setup/entry engine pass
+    entry_refine_timeframe: str | None = None  # finer timeframe used to refine the CE entry
 
     def to_json(self) -> dict:
         return {
@@ -132,6 +135,9 @@ class StrategySpec:
             "risk_rules": self.risk_rules,
             "direction": self.direction,
             "evaluate_both": self.evaluate_both,
+            "bias_timeframe": self.bias_timeframe,
+            "setup_timeframe": self.setup_timeframe,
+            "entry_refine_timeframe": self.entry_refine_timeframe,
         }
 
 
@@ -239,16 +245,21 @@ def preset_specs() -> dict[str, StrategySpec]:
             key="ict_liquidity",
             name="ICT Liquidity Sweep + MSS + FVG",
             description=(
-                "Direction-agnostic smart-money setup: price sweeps a liquidity pool "
-                "(prior-day / Asian / equal swing highs-lows), shifts market structure, "
-                "prints a displacement candle, then leaves an unmitigated fair value gap "
-                "(FVG) whose midpoint (CE) is the limit entry. Stop beyond the sweep "
+                "Three-timeframe smart-money setup: 1H bias gates the direction, price "
+                "sweeps a liquidity pool on the setup chart (prior-day / Asian / equal "
+                "swing highs-lows), shifts market structure, prints a displacement "
+                "candle, then leaves an unmitigated fair value gap (FVG) whose midpoint "
+                "(CE) is the limit entry, refined on the 1M chart. Stop beyond the sweep "
                 "extreme; TP1 at internal liquidity (≥2R, 50% off + breakeven), TP2 at "
                 "2.5R+ external liquidity. Entries only inside London/NY session windows."
             ),
             timeframes=["1m", "5m", "1h"],
             indicators={"atr": True},
+            bias_timeframe="1h",
+            setup_timeframe="5m",
+            entry_refine_timeframe="1m",
             entry_rules=[
+                {"name": "HTF bias alignment", "check": "htf_bias"},
                 {"name": "UTC session window (London/NY)", "check": "utc_session_open"},
                 {"name": "Liquidity sweep & reclaim", "check": "ict_sweep"},
                 {"name": "Market structure shift (MSS)", "check": "ict_mss"},
@@ -595,6 +606,41 @@ def _ict_analysis(ctx: MarketContext, direction: str) -> dict | None:
     }
 
 
+def _ict_refine_entry(
+    refine_ctx: MarketContext, setup_fvg: dict, direction: str
+) -> dict | None:
+    """Refine the entry on a finer chart (1M): find an FVG whose CE sits inside the
+    setup-chart gap zone. Returns the refined CE/FVG or None to keep the setup CE."""
+    candles = refine_ctx.candles
+    n = len(candles)
+    if n < 5:
+        return None
+    atr = refine_ctx.snapshot.atr_14 or _price(refine_ctx) * 0.02 or 1.0
+    px = _price(refine_ctx)
+    zone_bottom, zone_top = setup_fvg["bottom"], setup_fvg["top"]
+    for i in range(max(0, n - 9), n - 2):
+        c1, c3 = candles[i], candles[i + 2]
+        if direction == "LONG":
+            if not (c1.high < c3.low):
+                continue
+            bottom, top = c1.high, c3.low
+        else:
+            if not (c1.low > c3.high):
+                continue
+            top, bottom = c1.low, c3.high
+        ce = (top + bottom) / 2.0
+        # CE must lie inside (or touch) the setup-chart gap zone, and price must
+        # still be near the refined gap so the limit is reachable.
+        if not (zone_bottom - atr * 0.15 <= ce <= zone_top + atr * 0.15):
+            continue
+        if not (bottom - atr * 0.50 <= px <= top + atr * 0.50):
+            continue
+        if n - 1 - (i + 2) > 2:
+            continue
+        return {"c1": i, "c2": i + 1, "c3": i + 2, "bottom": bottom, "top": top, "ce": ce}
+    return None
+
+
 def _ict_plan_levels(ctx: MarketContext, ict: dict, direction: str) -> dict | None:
     """Derive entry (CE limit), stop (beyond sweep extreme) and 2R+/2.5R+ targets."""
     px = _price(ctx) or 0.0
@@ -708,6 +754,19 @@ def _c_ict_fvg(ctx: MarketContext, params: dict) -> tuple[bool, str]:
     return True, f"{direction} FVG {f['bottom']:,.4f}–{f['top']:,.4f} (CE {f['ce']:,.4f}) at bar {f['c2']}"
 
 
+def _c_htf_bias(ctx: MarketContext, params: dict) -> tuple[bool, str]:
+    bias = params.get("_bias")
+    direction = params.get("direction", "LONG")
+    if not bias:
+        return False, "Higher-timeframe context unavailable — cannot confirm HTF bias."
+    expected = "BULLISH" if direction == "LONG" else "BEARISH"
+    ok = bias == expected
+    return ok, (
+        f"1H bias {bias} supports the {direction} setup (structure agrees)."
+        if ok else f"1H bias {bias} rejects a {direction} setup — bias and structure disagree."
+    )
+
+
 _CHECKS: dict[str, Callable[[MarketContext, dict], tuple[bool, str]]] = {
     "rsi_lt": lambda ctx, p: (
         (ctx.snapshot.rsi_14 is not None and ctx.snapshot.rsi_14 < float(p.get("value", 30))),
@@ -807,6 +866,7 @@ _CHECKS: dict[str, Callable[[MarketContext, dict], tuple[bool, str]]] = {
     "ict_mss": _c_ict_mss,
     "ict_displacement": _c_ict_displacement,
     "ict_fvg": _c_ict_fvg,
+    "htf_bias": _c_htf_bias,
 }
 
 
@@ -862,10 +922,13 @@ def _apply_direction(
     params: dict,
     direction: str,
     ict_structure: dict | None = None,
+    htf_bias: str | None = None,
 ) -> tuple[str, dict]:
     """Flip a check for SHORT evaluation. LONG keeps it as-is."""
     if check in _ICT_CHECKS:
         return check, {**params, "direction": direction, "_ict": ict_structure}
+    if check == "htf_bias":
+        return check, {**params, "direction": direction, "_bias": htf_bias}
     if direction != "SHORT":
         return check, params
     if check == "trend_is":
@@ -956,14 +1019,29 @@ def _evaluate_one(
     ctx: MarketContext,
     spec: StrategySpec,
     direction: str,
+    *,
+    htf_bias: str | None = None,
+    refine_ctx: MarketContext | None = None,
 ) -> StrategySignal:
-    """Evaluate a strategy for a single resolved direction."""
+    """Evaluate a strategy for a single resolved direction.
+
+    `htf_bias` (from the higher-timeframe context) gates direction via the
+    `htf_bias` rule; `refine_ctx` (a finer timeframe) refines the FVG entry.
+    """
     rules = list(spec.entry_rules)
     ict_structure = None
     if direction in ("LONG", "SHORT") and any(
         str(rule.get("check", "")) in _ICT_CHECKS for rule in rules
     ):
         ict_structure = _ict_analysis(ctx, direction)
+        if ict_structure is not None:
+            if refine_ctx is not None:
+                refined = _ict_refine_entry(refine_ctx, ict_structure["fvg"], direction)
+                ict_structure["fvg_refined"] = refined is not None
+                if refined is not None:
+                    ict_structure["fvg"] = refined
+            else:
+                ict_structure["fvg_refined"] = False
 
     if not rules:
         ok, reason, results = _heuristic_entry(spec.key, ctx, direction)
@@ -989,7 +1067,7 @@ def _evaluate_one(
     for rule in rules:
         check = str(rule.get("check", ""))
         params = dict(rule.get("params") or {})
-        final_check, final_params = _apply_direction(check, params, direction, ict_structure)
+        final_check, final_params = _apply_direction(check, params, direction, ict_structure, htf_bias)
         evaluator = _CHECKS.get(final_check)
         if evaluator is None:
             results.append(RuleResult(rule.get("name", check), check, True, "No-op (unknown rule)"))
@@ -1031,20 +1109,37 @@ def evaluate_signal(
     candles: Sequence[Candle],
     *,
     direction_override: str | None = None,
+    higher_tf_candles: Sequence[Candle] | None = None,
+    entry_refine_candles: Sequence[Candle] | None = None,
 ) -> StrategySignal:
     """Run a strategy over a candle series and return a deterministic signal.
 
     `spec.evaluate_both` evaluates LONG and SHORT independently and returns the
     side whose full sequence (liquidity sweep → MSS → displacement → FVG)
     confirms, so structure decides — never a pre-baked market bias.
+
+    When `spec.bias_timeframe` is set, `higher_tf_candles` supply the higher
+    timeframe used to gate direction (`htf_bias` rule); when
+    `spec.entry_refine_timeframe` is set, `entry_refine_candles` refine the FVG
+    entry point (e.g. 5M setup → 1M CE).
     """
     ctx = build_market_context(symbol, timeframe, candles)
+
+    htf_bias = None
+    if spec.bias_timeframe and higher_tf_candles:
+        top = build_market_context(symbol, spec.bias_timeframe, higher_tf_candles)
+        htf_bias = top.snapshot.trend_bias
+
+    refine_ctx = None
+    if spec.entry_refine_timeframe and entry_refine_candles:
+        refine_ctx = build_market_context(symbol, spec.entry_refine_timeframe, entry_refine_candles)
+
     requested = (direction_override or spec.direction or "AUTO").upper()
     if requested in ("LONG", "SHORT"):
-        return _evaluate_one(ctx, spec, requested)
+        return _evaluate_one(ctx, spec, requested, htf_bias=htf_bias, refine_ctx=refine_ctx)
     if spec.evaluate_both:
-        long_sig = _evaluate_one(ctx, spec, "LONG")
-        short_sig = _evaluate_one(ctx, spec, "SHORT")
+        long_sig = _evaluate_one(ctx, spec, "LONG", htf_bias=htf_bias, refine_ctx=refine_ctx)
+        short_sig = _evaluate_one(ctx, spec, "SHORT", htf_bias=htf_bias, refine_ctx=refine_ctx)
         if long_sig.setup_confirmed and short_sig.setup_confirmed:
             lr = (long_sig.ict or {}).get("risk_reward", 0.0) if long_sig.ict else 0.0
             sr = (short_sig.ict or {}).get("risk_reward", 0.0) if short_sig.ict else 0.0
@@ -1067,4 +1162,4 @@ def evaluate_signal(
             context=ctx,
         )
     direction = _resolve_direction(spec, ctx)
-    return _evaluate_one(ctx, spec, direction)
+    return _evaluate_one(ctx, spec, direction, htf_bias=htf_bias, refine_ctx=refine_ctx)

@@ -48,9 +48,19 @@ class PlanManager:
         spec: StrategySpec,
         candles: list,
         direction_override: str | None = None,
+        higher_tf_candles: list | None = None,
+        entry_refine_candles: list | None = None,
     ) -> ProposedTrade:
         """Deterministic analysis. No DB, no network. Safe to call in a loop."""
-        signal = evaluate_signal(symbol, timeframe, spec, candles, direction_override=direction_override)
+        signal = evaluate_signal(
+            symbol,
+            timeframe,
+            spec,
+            candles,
+            direction_override=direction_override,
+            higher_tf_candles=higher_tf_candles,
+            entry_refine_candles=entry_refine_candles,
+        )
         plan = build_trade_plan(signal, spec)
         if plan is None:
             return ProposedTrade(None, None, state="no-setup", stage=TradePlanStage.ANALYSING)

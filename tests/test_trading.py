@@ -378,8 +378,8 @@ def _ict_climb_plan(n=50):
     return rows
 
 
-def _ict_candles(plan, start_hour=13):
-    """Hourly candles starting at `start_hour` UTC; with 49 bars the last is 13:00 UTC."""
+def _ict_candles(plan, start_hour=13, step_ms=3_600_000):
+    """Candles starting at `start_hour` UTC spaced by `step_ms`."""
     candles = []
     base_ts = int(
         datetime(2024, 1, 1, start_hour, 0, 0, tzinfo=timezone.utc).timestamp() * 1000
@@ -387,7 +387,7 @@ def _ict_candles(plan, start_hour=13):
     for i, (o, h, l, c) in enumerate(plan):
         candles.append(
             Candle(
-                timestamp=base_ts + i * 3_600_000,
+                timestamp=base_ts + i * step_ms,
                 open=round(o, 6),
                 high=round(h, 6),
                 low=round(l, 6),
@@ -398,20 +398,61 @@ def _ict_candles(plan, start_hour=13):
     return candles
 
 
+def _ict_bias_series(kind="bull"):
+    """A 50-bar 1H series with an unambiguous BULLISH / BEARISH / NEUTRAL bias."""
+    if kind == "bull":
+        return _ict_candles(_ict_climb_plan(50))
+    if kind == "bear":
+        mid = 103.5
+        bear = [
+            (round(2 * mid - o, 6), round(2 * mid - l, 6), round(2 * mid - h, 6), round(2 * mid - c, 6))
+            for (o, h, l, c) in _ict_climb_plan(50)
+        ]
+        return _ict_candles(bear)
+    flat = [(100.0, 100.05, 99.95, 100.0) for _ in range(50)]
+    return _ict_candles(flat)
+
+
+def _ict_refine_plan():
+    """A 1M series whose tail leaves a small bullish FVG inside the setup-chart gap."""
+    rows = []
+    prev = 100.53
+    for _ in range(57):
+        c = prev + 0.01 * math.sin(_ / 3.0)
+        rows.append((prev, c + 0.02, c - 0.02, c))
+        prev = c
+    b = prev
+    rows.append((b, b + 0.02, b - 0.05, b - 0.01))          # c1
+    rows.append((b - 0.01, b + 0.12, b - 0.02, b + 0.09))   # displacement up
+    rows.append((b + 0.04, b + 0.07, b + 0.03, b + 0.045))  # c3 low > c1.high -> FVG
+    return rows
+
+
 class TestICTLiquidity:
-    def _signal(self, plan):
+    def _signal(self, plan, bias="bull", refine=False):
         spec = preset_specs()["ict_liquidity"]
-        return evaluate_signal("BTC", "5m", spec, _ict_candles(plan))
+        higher_tf = _ict_bias_series(bias)
+        refine_candles = (
+            _ict_candles(_ict_refine_plan(), start_hour=13, step_ms=60_000) if refine else None
+        )
+        return evaluate_signal(
+            "BTC",
+            "5m",
+            spec,
+            _ict_candles(plan),
+            higher_tf_candles=higher_tf,
+            entry_refine_candles=refine_candles,
+        )
 
     def test_bullish_sweep_mss_fvg_confirms_long(self):
         sig = self._signal(_ict_bullish_plan())
         assert sig.setup_confirmed is True
         assert sig.direction == "LONG"
         assert sig.ict is not None
-        assert sig.entry_rules_passed == sig.entry_rules_total == 6
+        assert sig.entry_rules_passed == sig.entry_rules_total == 7
 
     def test_bearish_sweep_mss_fvg_confirms_short(self):
-        sig = self._signal(_ict_bearish_plan())
+        sig = self._signal(_ict_bearish_plan(), bias="bear")
         assert sig.setup_confirmed is True
         assert sig.direction == "SHORT"
         assert sig.ict is not None
@@ -421,6 +462,23 @@ class TestICTLiquidity:
         ctx = build_market_context("BTC", "5m", _ict_candles(plan))
         assert ctx.snapshot.trend_bias == "BULLISH"
         sig = self._signal(plan)
+        assert sig.setup_confirmed is False
+        assert sig.direction == "FLAT"
+
+    def test_bearish_bias_rejects_bullish_setup(self):
+        sig = self._signal(_ict_bullish_plan(), bias="bear")
+        assert sig.setup_confirmed is False
+        assert sig.direction == "FLAT"
+        assert any("BEARISH" in r for r in (sig.blocked_reasons or []))
+
+    def test_bullish_bias_rejects_bearish_setup(self):
+        sig = self._signal(_ict_bearish_plan(), bias="bull")
+        assert sig.setup_confirmed is False
+        assert sig.direction == "FLAT"
+        assert any("BULLISH" in r for r in (sig.blocked_reasons or []))
+
+    def test_neutral_bias_rejects_both_sides(self):
+        sig = self._signal(_ict_bullish_plan(), bias="neutral")
         assert sig.setup_confirmed is False
         assert sig.direction == "FLAT"
 
@@ -434,9 +492,21 @@ class TestICTLiquidity:
         assert plan.risk_reward >= 2.0
 
     def test_short_plan_levels_ordered(self):
-        sig = self._signal(_ict_bearish_plan())
+        sig = self._signal(_ict_bearish_plan(), bias="bear")
         plan = build_trade_plan(sig, preset_specs()["ict_liquidity"])
         assert plan is not None
         assert plan.direction == "SHORT"
         assert plan.stop_loss > plan.entry_high >= plan.entry_low > plan.take_profits[0] > plan.take_profits[1]
         assert plan.risk_reward >= 2.0
+
+    def test_higher_tf_gate_and_refine(self):
+        sig = self._signal(_ict_bullish_plan(), bias="bull", refine=True)
+        assert sig.setup_confirmed is True
+        assert sig.direction == "LONG"
+        # 1M refinement pulled the CE down from the 5M midpoint (~100.61) into the gap.
+        assert 100.50 < sig.ict["ce"] < 100.60
+        plan = build_trade_plan(sig, preset_specs()["ict_liquidity"])
+        assert plan is not None
+        assert plan.entry_type == "LIMIT"
+        assert plan.entry_low == plan.entry_high == round(sig.ict["ce"], 4)
+        assert 100.50 < plan.entry_low < 100.60

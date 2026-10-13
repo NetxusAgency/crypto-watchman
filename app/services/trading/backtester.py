@@ -90,6 +90,8 @@ def run_backtest(
     timeframe: str = "4h",
     fee_bps: float = 5.0,
     direction_override: str | None = None,
+    higher_tf_candles: list | None = None,
+    entry_refine_candles: list | None = None,
 ) -> BacktestReport:
     """Run a deterministic walk-forward backtest over the candle list."""
     if len(candles) < WINDOW + 2:
@@ -99,7 +101,15 @@ def run_backtest(
     i = WINDOW
     while i < len(candles) - 1:
         window = candles[i - WINDOW:i + 1]
-        signal = evaluate_signal(symbol, timeframe, spec, window, direction_override=direction_override)
+        signal = evaluate_signal(
+            symbol,
+            timeframe,
+            spec,
+            window,
+            direction_override=direction_override,
+            higher_tf_candles=higher_tf_candles,
+            entry_refine_candles=entry_refine_candles,
+        )
         plan = build_trade_plan(signal, spec)
         if plan is None:
             i += 1
